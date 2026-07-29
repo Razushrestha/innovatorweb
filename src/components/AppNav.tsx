@@ -1,6 +1,6 @@
 "use client";
 
-import Image from "next/image";
+import { BrandMark } from "@/components/BrandMark";
 
 export type AppTab =
   | "feed"
@@ -10,8 +10,7 @@ export type AppTab =
   | "post"
   | "shop"
   | "profile"
-  | "notifications"
-  | "menu";
+  | "notifications";
 
 type NavItem = {
   id: AppTab;
@@ -26,9 +25,8 @@ const items: NavItem[] = [
   { id: "chat", label: "Chat", icon: <IconChat /> },
   { id: "learn", label: "Learn", icon: <IconLearn /> },
   { id: "shop", label: "Shop", icon: <IconShop /> },
-  { id: "notifications", label: "Alerts", icon: <IconBell /> },
+  { id: "notifications", label: "Notifications", icon: <IconBell /> },
   { id: "profile", label: "Profile", icon: <IconUser /> },
-  { id: "menu", label: "More", icon: <IconMore /> },
 ];
 
 type Props = {
@@ -40,80 +38,68 @@ type Props = {
 
 export function SideNav({ active, onChange, email, onLogout }: Props) {
   return (
-    <aside className="liquid-nav-shell hidden h-dvh w-[248px] shrink-0 flex-col overflow-y-auto px-4 py-6 lg:flex xl:w-[272px]">
-      <button
-        type="button"
-        onClick={() => onChange("feed")}
-        className="liquid-press group mb-8 flex items-center gap-3 px-2 text-left"
-      >
-        <span className="relative h-12 w-12 overflow-hidden rounded-[18px] bg-white/90 shadow-soft ring-1 ring-white transition duration-300 group-hover:scale-[1.03]">
-          <Image
-            src="/center_logo.png"
-            alt=""
-            fill
-            sizes="48px"
-            className="object-contain p-1.5"
-            priority
-          />
-        </span>
-        <span>
-          <span className="block font-display text-[28px] font-extrabold leading-none tracking-[-0.05em] text-navy">
-            Innovator
+    <aside className="app-surface liquid-nav-shell hidden h-full w-[232px] shrink-0 flex-col py-5 pl-1 lg:flex xl:w-[248px]">
+      <div className="liquid-rail flex h-full min-h-0 flex-col overflow-hidden px-3 py-4">
+        <button
+          type="button"
+          onClick={() => onChange("feed")}
+          className="liquid-press group mb-5 flex items-center gap-3 px-2 text-left"
+        >
+          <BrandMark size={44} variant="soft" priority />
+          <span className="min-w-0">
+            <span className="block font-display text-[24px] font-extrabold leading-none tracking-[-0.05em] text-navy">
+              Innovator
+            </span>
+            <span className="mt-1 block text-[11px] font-medium text-muted">
+              Creative network
+            </span>
           </span>
-          <span className="mt-1 block text-[12px] font-medium text-muted">
-            Your creative network
-          </span>
-        </span>
-      </button>
+        </button>
 
-      <nav className="flex flex-1 flex-col gap-1.5">
-        {items.map((item) => {
-          const selected = active === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onChange(item.id)}
-              className={`nav-item relative flex items-center gap-3 rounded-[20px] px-3 py-3 text-left ${
-                selected
-                  ? "nav-item-liquid-active"
-                  : "nav-item-liquid text-ink/75"
-              }`}
-            >
-              {selected ? (
-                <span className="absolute left-0 top-1/2 h-7 w-1 -translate-y-1/2 rounded-r-full bg-gold" />
-              ) : null}
-              <span
-                className={`grid h-9 w-9 place-items-center rounded-[14px] transition ${
-                  selected
-                    ? "bg-white/10 text-gold"
-                    : "bg-white/55 text-navy shadow-soft"
+        <nav className="liquid-scroll flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pr-0.5">
+          {items.map((item) => {
+            const selected = active === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onChange(item.id)}
+                className={`nav-item relative flex items-center gap-3 rounded-[16px] px-2.5 py-2.5 text-left ${
+                  selected ? "nav-item-liquid-active" : "nav-item-liquid"
                 }`}
               >
-                {item.icon}
-              </span>
-              <span className="font-display text-[16px] font-semibold tracking-[-0.02em]">
-                {item.label}
-              </span>
-            </button>
-          );
-        })}
-      </nav>
+                <span
+                  className={`grid h-8 w-8 place-items-center rounded-[12px] transition ${
+                    selected
+                      ? "bg-white/10 text-gold"
+                      : "bg-white/80 text-navy/70 shadow-soft"
+                  }`}
+                >
+                  {item.icon}
+                </span>
+                <span className="font-display text-[15px] font-semibold tracking-[-0.02em]">
+                  {item.label}
+                </span>
+              </button>
+            );
+          })}
+        </nav>
 
-      <div className="liquid-glass mt-4 p-4">
-        <p className="truncate text-[13px] font-semibold text-navy">
-          {email || "Signed in"}
-        </p>
-        <p className="mt-0.5 text-[12px] text-muted">Account</p>
-        {onLogout ? (
-          <button
-            type="button"
-            onClick={onLogout}
-            className="mt-3 text-[13px] font-semibold text-navy/70 underline-offset-2 hover:text-navy hover:underline"
-          >
-            Log out
-          </button>
-        ) : null}
+        <div className="mt-3 border-t border-navy/[0.06] px-2 pt-3">
+          <p className="truncate text-[12px] font-semibold text-navy">
+            {email || "Signed in"}
+          </p>
+          <p className="mt-0.5 text-[11px] text-muted">Signed in</p>
+          {onLogout ? (
+            <button
+              type="button"
+              onClick={onLogout}
+              className="mt-2 text-[12px] font-semibold text-navy/55 transition hover:text-navy"
+            >
+              Log out
+            </button>
+          ) : null}
+        </div>
       </div>
     </aside>
   );
@@ -127,22 +113,15 @@ export function MobileTopBar({
   onLogoClick: () => void;
 }) {
   return (
-    <header className="sticky top-0 z-30 border-b border-white/50 bg-white/45 px-4 py-3 backdrop-blur-2xl lg:hidden">
+    <header className="app-surface sticky top-0 z-30 border-b border-navy/[0.06] px-4 py-3 lg:hidden">
       <div className="mx-auto flex max-w-[720px] items-center gap-3">
         <button
           type="button"
           onClick={onLogoClick}
-          className="liquid-press relative h-10 w-10 shrink-0 overflow-hidden rounded-[14px] bg-white/90 shadow-soft ring-1 ring-white"
+          className="liquid-press shrink-0"
           aria-label="Innovator home"
         >
-          <Image
-            src="/center_logo.png"
-            alt="Innovator"
-            fill
-            sizes="40px"
-            className="object-contain p-1"
-            priority
-          />
+          <BrandMark size={40} variant="soft" priority />
         </button>
         <div className="min-w-0">
           <p className="font-display text-[20px] font-extrabold leading-none tracking-[-0.04em] text-navy">
@@ -328,16 +307,6 @@ function IconBell() {
         strokeWidth="1.8"
         strokeLinecap="round"
       />
-    </svg>
-  );
-}
-
-function IconMore() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle cx="6" cy="12" r="1.6" fill="currentColor" />
-      <circle cx="12" cy="12" r="1.6" fill="currentColor" />
-      <circle cx="18" cy="12" r="1.6" fill="currentColor" />
     </svg>
   );
 }

@@ -54,9 +54,9 @@ export function FeedSection({
 
   if (loading && posts.length === 0) {
     return (
-      <div className="space-y-3.5 py-2">
+      <div className="feed-list py-2">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="liquid-glass animate-pulse p-4">
+          <div key={i} className="feed-post liquid-glass animate-pulse p-4">
             <div className="flex items-center gap-3">
               <div className="h-11 w-11 rounded-[16px] bg-navy/10" />
               <div className="h-4 w-36 rounded-full bg-navy/10" />
@@ -77,7 +77,7 @@ export function FeedSection({
 
   if (posts.length === 0) {
     return (
-      <div className="space-y-3.5 pb-8">
+      <div className="feed-list pb-8">
         {onCompose ? <ComposePrompt onCompose={onCompose} /> : null}
         <LiquidEmpty
           title="Start the conversation"
@@ -90,34 +90,32 @@ export function FeedSection({
   }
 
   return (
-    <div className="space-y-3.5 pb-8">
+    <div className="feed-list pb-8">
       {onCompose ? <ComposePrompt onCompose={onCompose} /> : null}
 
-      <div className="space-y-3.5">
-        {posts.map((post, index) => (
-          <div
-            key={post.id}
-            className="animate-fade-up"
-            style={{ animationDelay: `${Math.min(index, 6) * 50}ms` }}
-          >
-            <FeedCard
-              post={post}
-              onChange={(updated) =>
-                setPosts((prev) =>
-                  prev.map((p) => (p.id === updated.id ? updated : p)),
-                )
-              }
-              onDeleted={(id) =>
-                setPosts((prev) => prev.filter((p) => p.id !== id))
-              }
-              onBlocked={(userId) =>
-                setPosts((prev) => prev.filter((p) => p.userId !== userId))
-              }
-              onOpenAuthor={onOpenAuthor}
-            />
-          </div>
-        ))}
-      </div>
+      {posts.map((post, index) => (
+        <div
+          key={post.id}
+          className="animate-fade-up"
+          style={{ animationDelay: `${Math.min(index, 6) * 50}ms` }}
+        >
+          <FeedCard
+            post={post}
+            onChange={(updated) =>
+              setPosts((prev) =>
+                prev.map((p) => (p.id === updated.id ? updated : p)),
+              )
+            }
+            onDeleted={(id) =>
+              setPosts((prev) => prev.filter((p) => p.id !== id))
+            }
+            onBlocked={(userId) =>
+              setPosts((prev) => prev.filter((p) => p.userId !== userId))
+            }
+            onOpenAuthor={onOpenAuthor}
+          />
+        </div>
+      ))}
 
       {hasMore ? (
         <div className="flex justify-center pt-6">

@@ -1,6 +1,6 @@
 import { ApiConfig } from "./api-config";
 import { apiMultipart, apiRequest } from "./api-client";
-import type { UserProfile } from "./types";
+import type { ProfileListUser, UserProfile } from "./types";
 
 function asProfile(raw: Record<string, unknown>): UserProfile {
   const interests = Array.isArray(raw.interests)
@@ -139,4 +139,42 @@ export async function blockUser(targetAuthUserId: string) {
     isBlocked: raw.is_blocked === true || raw.isBlocked === true,
     message: (raw.message as string | null) ?? null,
   };
+}
+
+function asListUser(raw: Record<string, unknown>): ProfileListUser {
+  return {
+    id: String(raw.id ?? ""),
+    username: (raw.username as string | null) ?? null,
+    fullName:
+      (raw.full_name as string | null) ??
+      (raw.fullName as string | null) ??
+      null,
+    avatar: (raw.avatar as string | null) ?? null,
+    role: (raw.role as string | null) ?? null,
+    isFollowed: raw.is_followed === true || raw.isFollowed === true,
+  };
+}
+
+async function listUsers(path: string) {
+  const data = await apiRequest<unknown>(ApiConfig.profileBaseUrl, path);
+  if (!Array.isArray(data)) return [] as ProfileListUser[];
+  return data
+    .filter((u): u is Record<string, unknown> => !!u && typeof u === "object")
+    .map(asListUser);
+}
+
+export async function listFollowers(authUserId?: string | null) {
+  const path =
+    authUserId && authUserId.trim()
+      ? `/api/users/${encodeURIComponent(authUserId)}/followers`
+      : "/api/users/followers";
+  return listUsers(path);
+}
+
+export async function listFollowing(authUserId?: string | null) {
+  const path =
+    authUserId && authUserId.trim()
+      ? `/api/users/${encodeURIComponent(authUserId)}/following`
+      : "/api/users/following";
+  return listUsers(path);
 }

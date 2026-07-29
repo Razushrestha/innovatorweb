@@ -133,7 +133,7 @@ export function FeedCard({
       update({ ...local, isFollowed: result.isFollowing });
     } catch (e) {
       update({ ...local, isFollowed: !next });
-      showToast(e instanceof ApiException ? e.message : "Follow failed");
+      showToast(e instanceof ApiException ? e.message : "Collaborate failed");
     } finally {
       setBusy(false);
     }
@@ -251,8 +251,16 @@ export function FeedCard({
   }
 
   return (
-    <article className="liquid-glass feed-post relative">
-      <header className="mb-2.5 flex items-start gap-3">
+    <article
+      className={`liquid-glass feed-post relative ${
+        menuOpen ? "feed-post-menu-open" : ""
+      }`}
+    >
+      <header
+        className={`mb-2.5 flex items-start gap-3 ${
+          menuOpen ? "relative z-30" : ""
+        }`}
+      >
         <button
           type="button"
           onClick={() => setAvatarOpen(true)}
@@ -312,11 +320,11 @@ export function FeedCard({
             >
               {local.isFollowed ? (
                 <>
-                  <IconCheck /> Following
+                  <IconCheck /> Collaborating
                 </>
               ) : (
                 <>
-                  <IconPlus /> Follow
+                  <IconPlus /> Collaborate
                 </>
               )}
             </button>
@@ -334,7 +342,7 @@ export function FeedCard({
             </button>
 
             {menuOpen ? (
-              <div className="absolute right-0 top-[calc(100%+6px)] z-30 w-[168px] overflow-hidden rounded-[18px] border border-white/95 bg-white/90 p-2 shadow-[0_8px_20px_rgba(7,19,35,0.16)] backdrop-blur-xl">
+              <div className="feed-post-menu absolute right-0 top-[calc(100%+6px)] z-50 w-[168px] overflow-hidden rounded-[18px] border border-navy/[0.08] bg-white p-1.5 shadow-[0_12px_28px_rgba(7,19,35,0.18)]">
                 <MenuItem
                   icon={<IconRepost />}
                   label="Repost"
@@ -625,7 +633,7 @@ function MenuItem({
     <button
       type="button"
       onClick={onClick}
-      className={`liquid-press mb-1 flex w-full items-center gap-2.5 rounded-[12px] px-3 py-2.5 text-left text-[13.5px] font-semibold last:mb-0 hover:bg-white/70 ${
+      className={`liquid-press mb-0.5 flex w-full items-center gap-2.5 rounded-[12px] px-3 py-2.5 text-left text-[13.5px] font-semibold last:mb-0 hover:bg-navy/[0.05] ${
         destructive ? "text-[#C0392B]" : "text-navy"
       }`}
     >

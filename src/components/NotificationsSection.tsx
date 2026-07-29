@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import Image from "next/image";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiException } from "@/lib/api-client";
 import {
   deleteNotification,
@@ -9,28 +10,79 @@ import {
   markNotificationRead,
 } from "@/lib/notifications-api";
 import type { AppNotification } from "@/lib/types";
-import {
-  LiquidEmpty,
-  LiquidError,
-  LiquidLoader,
-} from "./ui/LiquidChrome";
+import { LiquidError, LiquidLoader } from "./ui/LiquidChrome";
+
+type Filter = "all" | "unread";
+type NotifKind = "like" | "comment" | "collaborate" | "mention" | "system";
 
 function timeAgo(iso?: string | null) {
   if (!iso) return "";
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return "";
   const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (mins < 60) return `${mins}m`;
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
   const hours = Math.round(mins / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.round(hours / 24)}d`;
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(t).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function dayKey(iso?: string | null) {
+  if (!iso) return "earlier";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "earlier";
+  const d = new Date(t);
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startYesterday = new Date(startToday);
+  startYesterday.setDate(startYesterday.getDate() - 1);
+  if (d >= startToday) return "today";
+  if (d >= startYesterday) return "yesterday";
+  return "earlier";
+}
+
+function kindOf(n: AppNotification): NotifKind {
+  const blob = `${n.type ?? ""} ${n.title} ${n.message}`.toLowerCase();
+  if (/(like|loved|heart|react)/.test(blob)) return "like";
+  if (/(comment|replied|reply)/.test(blob)) return "comment";
+  if (/(follow|collab|collaborat|connect)/.test(blob)) return "collaborate";
+  if (/(mention|tagged|@)/.test(blob)) return "mention";
+  return "system";
+}
+
+function kindLabel(kind: NotifKind) {
+  switch (kind) {
+    case "like":
+      return "Like";
+    case "comment":
+      return "Comment";
+    case "collaborate":
+      return "Collaborate";
+    case "mention":
+      return "Mention";
+    default:
+      return "Update";
+  }
+}
+
+function groupLabel(key: string) {
+  if (key === "today") return "Today";
+  if (key === "yesterday") return "Yesterday";
+  return "Earlier";
 }
 
 export function NotificationsSection() {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [markingAll, setMarkingAll] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -50,15 +102,69 @@ export function NotificationsSection() {
     void load();
   }, [load]);
 
-  const shown = items.filter((n) => (filter === "all" ? true : !n.isRead));
-  const unread = items.filter((n) => !n.isRead).length;
+  const unread = useMemo(
+    () => items.filter((n) => !n.isRead).length,
+    [items],
+  );
+  const shown = useMemo(
+    () => items.filter((n) => (filter === "all" ? true : !n.isRead)),
+    [items, filter],
+  );
 
-  if (loading) return <LiquidLoader label="Loading alerts…" />;
+  const groups = useMemo(() => {
+    const order = ["today", "yesterday", "earlier"] as const;
+    const map: Record<string, AppNotification[]> = {
+      today: [],
+      yesterday: [],
+      earlier: [],
+    };
+    for (const n of shown) {
+      map[dayKey(n.createdAt)].push(n);
+    }
+    return order
+      .filter((k) => map[k].length > 0)
+      .map((k) => ({ key: k, label: groupLabel(k), items: map[k] }));
+  }, [shown]);
+
+  async function onMarkRead(id: string) {
+    setBusyId(id);
+    try {
+      await markNotificationRead(id);
+      setItems((prev) =>
+        prev.map((x) => (x.id === id ? { ...x, isRead: true } : x)),
+      );
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function onMarkAll() {
+    if (unread === 0) return;
+    setMarkingAll(true);
+    try {
+      await markAllNotificationsRead();
+      setItems((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    } finally {
+      setMarkingAll(false);
+    }
+  }
+
+  async function onDelete(id: string) {
+    setBusyId(id);
+    try {
+      await deleteNotification(id);
+      setItems((prev) => prev.filter((x) => x.id !== id));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  if (loading) return <LiquidLoader label="Loading notifications…" />;
 
   return (
-    <div className="space-y-4 pb-6">
+    <div className="notif-shell space-y-3 pb-8">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => setFilter("all")}
@@ -76,14 +182,11 @@ export function NotificationsSection() {
         </div>
         <button
           type="button"
-          className="liquid-chip"
-          onClick={() =>
-            void markAllNotificationsRead().then(() =>
-              setItems((prev) => prev.map((n) => ({ ...n, isRead: true }))),
-            )
-          }
+          disabled={unread === 0 || markingAll}
+          onClick={() => void onMarkAll()}
+          className="text-[12.5px] font-semibold text-navy/50 transition hover:text-navy disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Mark all read
+          {markingAll ? "Updating…" : "Mark all read"}
         </button>
       </div>
 
@@ -92,66 +195,215 @@ export function NotificationsSection() {
       ) : null}
 
       {!error && shown.length === 0 ? (
-        <LiquidEmpty
-          title="You’re caught up"
-          body="New likes, comments, and follows will land here."
-        />
+        <div className="px-1 py-14 text-center">
+          <p className="font-display text-[18px] font-extrabold tracking-[-0.03em] text-navy">
+            {filter === "unread" ? "No unread alerts" : "You’re caught up"}
+          </p>
+          <p className="mx-auto mt-1.5 max-w-[34ch] text-[13.5px] leading-relaxed text-muted">
+            {filter === "unread"
+              ? "Everything here has been reviewed."
+              : "New likes, comments, and collaborations will appear here."}
+          </p>
+          {filter === "unread" ? (
+            <button
+              type="button"
+              onClick={() => setFilter("all")}
+              className="mt-4 text-[13px] font-semibold text-navy/60 underline-offset-2 hover:text-navy hover:underline"
+            >
+              View all
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
-      <ul className="space-y-2.5">
-        {shown.map((n) => (
-          <li
-            key={n.id}
-            className={`liquid-glass p-4 ${
-              n.isRead ? "opacity-85" : "ring-1 ring-gold/40"
-            }`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="font-display text-[15px] font-bold text-navy">
-                  {n.title}
-                </p>
-                <p className="mt-1 text-[13.5px] text-ink/80">{n.message}</p>
-                <p className="mt-2 text-[12px] text-muted">
-                  {[n.senderUsername, timeAgo(n.createdAt)]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-              </div>
-              <div className="flex shrink-0 flex-col gap-1.5">
-                {!n.isRead ? (
-                  <button
-                    type="button"
-                    className="liquid-chip !py-1 text-[11px]"
-                    onClick={() =>
-                      void markNotificationRead(n.id).then(() =>
-                        setItems((prev) =>
-                          prev.map((x) =>
-                            x.id === n.id ? { ...x, isRead: true } : x,
-                          ),
-                        ),
-                      )
-                    }
-                  >
-                    Read
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="liquid-chip !py-1 text-[11px] text-red-600"
-                  onClick={() =>
-                    void deleteNotification(n.id).then(() =>
-                      setItems((prev) => prev.filter((x) => x.id !== n.id)),
-                    )
-                  }
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          </li>
-        ))}
-      </ul>
+      {!error && groups.length > 0 ? (
+        <div className="space-y-5">
+          {groups.map((group) => (
+            <section key={group.key}>
+              <h3 className="notif-group-label">{group.label}</h3>
+              <ul className="notif-list">
+                {group.items.map((n) => {
+                  const kind = kindOf(n);
+                  const letter = (
+                    n.senderUsername?.trim()?.[0] ||
+                    n.title.trim()?.[0] ||
+                    "N"
+                  ).toUpperCase();
+                  const busy = busyId === n.id;
+
+                  return (
+                    <li key={n.id}>
+                      <article
+                        className={`notif-item ${n.isRead ? "" : "unread"}`}
+                      >
+                        <div className="notif-avatar" aria-hidden>
+                          {n.senderAvatar ? (
+                            <Image
+                              src={n.senderAvatar}
+                              alt=""
+                              width={44}
+                              height={44}
+                              unoptimized
+                            />
+                          ) : (
+                            <span className="font-display text-[16px] font-bold">
+                              {letter}
+                            </span>
+                          )}
+                          <span className="notif-type-badge">
+                            <KindIcon kind={kind} />
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          className="min-w-0 text-left"
+                          disabled={busy}
+                          onClick={() => {
+                            if (!n.isRead) void onMarkRead(n.id);
+                          }}
+                        >
+                          <span className="notif-title">{n.title}</span>
+                          {n.message ? (
+                            <span className="notif-message line-clamp-2 block">
+                              {n.message}
+                            </span>
+                          ) : null}
+                          <span className="notif-meta">
+                            <span>{kindLabel(kind)}</span>
+                            {n.senderUsername ? (
+                              <span>· @{n.senderUsername}</span>
+                            ) : null}
+                            {!n.isRead ? (
+                              <span className="font-bold text-[var(--gold)]">
+                                · New
+                              </span>
+                            ) : null}
+                          </span>
+                        </button>
+
+                        <div className="notif-actions">
+                          <span className="notif-time">
+                            {timeAgo(n.createdAt)}
+                          </span>
+                          {!n.isRead ? (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              className="notif-icon-btn"
+                              title="Mark as read"
+                              aria-label="Mark as read"
+                              onClick={() => void onMarkRead(n.id)}
+                            >
+                              <IconCheck />
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={busy}
+                            className="notif-icon-btn danger"
+                            title="Delete"
+                            aria-label="Delete notification"
+                            onClick={() => void onDelete(n.id)}
+                          >
+                            <IconTrash />
+                          </button>
+                        </div>
+                      </article>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function KindIcon({ kind }: { kind: NotifKind }) {
+  switch (kind) {
+    case "like":
+      return (
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+          <path d="M12 21s-7-4.35-9.5-8.2C.5 9.4 2.2 5.8 5.6 5.2c1.9-.3 3.7.6 4.7 2.1 1-1.5 2.8-2.4 4.7-2.1 3.4.6 5.1 4.2 3.1 7.6C19 16.65 12 21 12 21z" />
+        </svg>
+      );
+    case "comment":
+      return (
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path
+            d="M5 6.5A2.5 2.5 0 017.5 4h9A2.5 2.5 0 0119 6.5v7A2.5 2.5 0 0116.5 16H10l-4 3v-3.2A2.5 2.5 0 015 13.5v-7z"
+            stroke="currentColor"
+            strokeWidth="2"
+          />
+        </svg>
+      );
+    case "collaborate":
+      return (
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <circle cx="9" cy="9" r="3" stroke="currentColor" strokeWidth="2" />
+          <circle cx="16" cy="10.5" r="2.5" stroke="currentColor" strokeWidth="2" />
+          <path
+            d="M4.5 18c.7-2.4 2.5-3.5 4.5-3.5s3.8 1.1 4.5 3.5"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    case "mention":
+      return (
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="2" />
+          <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" />
+          <path
+            d="M15 12v1.4a2.1 2.1 0 004.2 0V12"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    default:
+      return (
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path
+            d="M12 4v2M12 18v2M4 12H6M18 12h2M6.8 6.8l1.4 1.4M15.8 15.8l1.4 1.4M6.8 17.2l1.4-1.4M15.8 8.2l1.4-1.4"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+  }
+}
+
+function IconCheck() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M5 12.5l4.5 4.5L19 7"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconTrash() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M5 7h14M9 7V5.5A1.5 1.5 0 0110.5 4h3A1.5 1.5 0 0115 5.5V7m-7 0l.7 12.2A1.5 1.5 0 0010.2 20.5h3.6a1.5 1.5 0 001.5-1.3L16 7"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }

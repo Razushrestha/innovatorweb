@@ -10,9 +10,12 @@ export function BlobBackground({
 }: Props) {
   return (
     <div
-      className={`relative min-h-dvh overflow-x-hidden bg-canvas ${className}`}
+      className={`app-surface relative min-h-dvh overflow-x-hidden ${className}`}
+      style={{ backgroundColor: "var(--canvas)" }}
     >
-      <div className="relative z-10 h-full min-h-[inherit]">{children}</div>
+      <div className="app-surface relative z-10 h-full min-h-[inherit]">
+        {children}
+      </div>
     </div>
   );
 }

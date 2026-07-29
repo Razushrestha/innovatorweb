@@ -44,6 +44,18 @@ export function asPost(raw: Record<string, unknown>): FeedPost {
   };
 }
 
+function asFeedPage(data: Record<string, unknown>): FeedPage {
+  const resultsRaw = Array.isArray(data.results) ? data.results : [];
+  return {
+    results: resultsRaw
+      .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
+      .map(asPost),
+    count: Number(data.count ?? 0),
+    next: (data.next as string | null) ?? null,
+    previous: (data.previous as string | null) ?? null,
+  };
+}
+
 export async function getFeed(page = 1, pageSize = ApiConfig.feedPageSize) {
   const data = await apiRequest<Record<string, unknown>>(
     ApiConfig.feedBaseUrl,
@@ -52,17 +64,22 @@ export async function getFeed(page = 1, pageSize = ApiConfig.feedPageSize) {
       query: { page: String(page), pageSize: String(pageSize) },
     },
   );
+  return asFeedPage(data);
+}
 
-  const resultsRaw = Array.isArray(data.results) ? data.results : [];
-  const pageData: FeedPage = {
-    results: resultsRaw
-      .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
-      .map(asPost),
-    count: Number(data.count ?? 0),
-    next: (data.next as string | null) ?? null,
-    previous: (data.previous as string | null) ?? null,
-  };
-  return pageData;
+export async function getPostsByAuthor(
+  authorId: string,
+  page = 1,
+  pageSize = ApiConfig.feedPageSize,
+) {
+  const data = await apiRequest<Record<string, unknown>>(
+    ApiConfig.feedBaseUrl,
+    `/api/users/${encodeURIComponent(authorId)}/posts`,
+    {
+      query: { page: String(page), pageSize: String(pageSize) },
+    },
+  );
+  return asFeedPage(data);
 }
 
 export async function getCategories() {

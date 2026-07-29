@@ -19,7 +19,9 @@ export const metadata: Metadata = {
   title: "Innovator",
   description: "Innovator — learn, share, and grow together.",
   icons: {
-    icon: "/app_icon.png",
+    icon: [{ url: "/innovator-logo.png", type: "image/png" }],
+    apple: [{ url: "/innovator-logo.png" }],
+    shortcut: "/innovator-logo.png",
   },
 };
 

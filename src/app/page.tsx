@@ -1,9 +1,9 @@
 "use client";
 
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { BlobBackground } from "@/components/BlobBackground";
+import { BrandMark } from "@/components/BrandMark";
 import { AuthSession } from "@/lib/auth-session";
 
 export default function SplashPage() {
@@ -28,16 +28,9 @@ export default function SplashPage() {
         }`}
       >
         <div className="animate-fade-up flex flex-col items-center text-center">
-          <div className="liquid-glass mb-6 grid h-28 w-28 place-items-center !rounded-full p-1 shadow-glass">
-            <div className="relative h-full w-full overflow-hidden rounded-full bg-white/90">
-              <Image
-                src="/splash_logo.png"
-                alt="Innovator"
-                fill
-                priority
-                sizes="112px"
-                className="object-contain p-3"
-              />
+          <div className="mb-6 grid place-items-center">
+            <div className="liquid-glass grid h-[124px] w-[124px] place-items-center !rounded-[32px] p-3 shadow-glass">
+              <BrandMark size={92} variant="plain" priority />
             </div>
           </div>
           <h1 className="font-display text-[42px] font-extrabold tracking-[-0.04em] text-navy">

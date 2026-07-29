@@ -18,6 +18,7 @@ import { NotificationsSection } from "@/components/NotificationsSection";
 import { ProfileSection } from "@/components/ProfileSection";
 import { SearchSection } from "@/components/SearchSection";
 import { ShopSection } from "@/components/ShopSection";
+import { BrandMark } from "@/components/BrandMark";
 import { logout } from "@/lib/auth-api";
 import { AuthSession } from "@/lib/auth-session";
 
@@ -26,7 +27,6 @@ export default function AppShellPage() {
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<AppTab>("feed");
   const [email, setEmail] = useState<string | null>(null);
-  const [username, setUsername] = useState<string | null>(null);
   const [feedKey, setFeedKey] = useState(0);
   const [authorView, setAuthorView] = useState<{
     userId: string;
@@ -40,7 +40,6 @@ export default function AppShellPage() {
     }
     const session = AuthSession.load();
     setEmail(session.email);
-    setUsername(session.username);
     setReady(true);
   }, [router]);
 
@@ -61,7 +60,7 @@ export default function AppShellPage() {
 
   return (
     <BlobBackground animate={false} className="!h-dvh !min-h-0 !overflow-hidden">
-      <div className="mx-auto flex h-dvh w-full max-w-[1280px] overflow-hidden">
+      <div className="app-surface mx-auto flex h-dvh w-full max-w-[1360px] items-stretch gap-5 overflow-hidden px-3 sm:px-4 lg:gap-7 lg:px-6 xl:gap-8 xl:px-8">
         <SideNav
           active={tab}
           onChange={(next) => {
@@ -72,7 +71,7 @@ export default function AppShellPage() {
           onLogout={() => void onLogout()}
         />
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="app-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <MobileTopBar
             title={authorView ? "Profile" : tabLabel(tab)}
             onLogoClick={() => {
@@ -81,12 +80,12 @@ export default function AppShellPage() {
             }}
           />
 
-          <div className="flex min-h-0 flex-1 justify-center gap-8 overflow-hidden px-4 pt-4 sm:px-6 lg:px-8 lg:pt-6">
+          <div className="app-surface flex min-h-0 flex-1 justify-center gap-6 overflow-hidden pt-3 lg:gap-8 lg:pt-5 xl:gap-10">
             <main
-              className={`liquid-scroll min-h-0 w-full min-w-0 flex-1 overflow-y-auto overscroll-contain pb-28 lg:pb-8 ${
+              className={`app-surface liquid-scroll min-h-0 w-full min-w-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-28 sm:px-0 lg:pb-8 ${
                 tab === "chat" && !authorView
-                  ? "max-w-[920px]"
-                  : "max-w-[680px]"
+                  ? "max-w-[980px]"
+                  : "max-w-[640px]"
               }`}
             >
               {authorView ? (
@@ -94,6 +93,9 @@ export default function AppShellPage() {
                   authUserId={authorView.userId}
                   fallbackName={authorView.name}
                   onBack={() => setAuthorView(null)}
+                  onOpenAuthor={(userId, name) =>
+                    setAuthorView({ userId, name })
+                  }
                 />
               ) : null}
 
@@ -116,77 +118,43 @@ export default function AppShellPage() {
                 />
               ) : null}
 
-              {!authorView && tab === "search" ? <SearchSection /> : null}
+              {!authorView && tab === "search" ? (
+                <SearchSection
+                  onOpenAuthor={(userId, name) =>
+                    setAuthorView({ userId, name })
+                  }
+                />
+              ) : null}
               {!authorView && tab === "chat" ? <ChatSection /> : null}
               {!authorView && tab === "learn" ? <LearnSection /> : null}
               {!authorView && tab === "shop" ? <ShopSection /> : null}
-              {!authorView && tab === "profile" ? <ProfileSection /> : null}
+              {!authorView && tab === "profile" ? (
+                <ProfileSection
+                  onOpenAuthor={(userId, name) =>
+                    setAuthorView({ userId, name })
+                  }
+                />
+              ) : null}
               {!authorView && tab === "notifications" ? (
                 <NotificationsSection />
               ) : null}
-
-              {!authorView && tab === "menu" ? (
-                <div className="max-w-md space-y-4 pb-6">
-                  <section className="liquid-glass space-y-3 p-5">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gold">
-                        Account
-                      </p>
-                      <h2 className="mt-1 truncate font-display text-[22px] font-extrabold tracking-[-0.03em] text-navy">
-                        {username || "Member"}
-                      </h2>
-                      <p className="mt-0.5 truncate text-[13px] text-muted">
-                        {email}
-                      </p>
-                    </div>
-                    <div className="liquid-divider" />
-                    <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-muted">
-                      Jump to
-                    </p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {(
-                        [
-                          ["profile", "Profile"],
-                          ["notifications", "Alerts"],
-                          ["learn", "Learn"],
-                          ["shop", "Shop"],
-                          ["chat", "Chat"],
-                          ["search", "Search"],
-                        ] as const
-                      ).map(([id, label]) => (
-                        <button
-                          key={id}
-                          type="button"
-                          onClick={() => {
-                            setAuthorView(null);
-                            setTab(id);
-                          }}
-                          className="liquid-chip justify-center py-2.5"
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="liquid-divider" />
-                    <button
-                      type="button"
-                      onClick={() => void onLogout()}
-                      className="liquid-btn liquid-btn-dark w-full"
-                    >
-                      Log out
-                    </button>
-                  </section>
-                </div>
-              ) : null}
             </main>
 
-            <aside className="hidden h-full w-[280px] shrink-0 overflow-y-auto overscroll-contain pb-8 xl:block">
-              <div className="space-y-4">
-                <div className="liquid-glass p-5">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gold">
-                    Innovator
-                  </p>
-                  <p className="mt-1 font-display text-[20px] font-extrabold tracking-[-0.03em] text-navy">
+            <aside className="app-surface hidden h-full w-[268px] shrink-0 py-5 xl:block">
+              <div className="liquid-rail liquid-scroll flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain p-4">
+                <div className="px-1 pb-4">
+                  <div className="mb-3 flex items-center gap-2.5">
+                    <BrandMark size={36} variant="soft" />
+                    <div className="min-w-0">
+                      <p className="font-display text-[16px] font-extrabold tracking-[-0.03em] text-navy">
+                        Innovator
+                      </p>
+                      <p className="text-[11px] font-medium text-muted">
+                        Workspace
+                      </p>
+                    </div>
+                  </div>
+                  <p className="mt-1.5 font-display text-[19px] font-extrabold leading-snug tracking-[-0.03em] text-navy">
                     Build with the community
                   </p>
                   <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
@@ -198,21 +166,23 @@ export default function AppShellPage() {
                       setAuthorView(null);
                       setTab("post");
                     }}
-                    className="liquid-btn liquid-btn-dark mt-4 !min-h-0 px-4 py-2.5 text-[13px]"
+                    className="liquid-btn liquid-btn-dark mt-4 !min-h-0 w-full px-4 py-2.5 text-[13px]"
                   >
                     Create post
                   </button>
                 </div>
 
-                <div className="liquid-glass p-4">
-                  <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-muted">
+                <div className="liquid-divider" />
+
+                <div className="pt-4">
+                  <p className="px-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
                     Shortcuts
                   </p>
-                  <div className="mt-3 space-y-1">
+                  <div className="mt-2 space-y-0.5">
                     {(
                       [
                         ["search", "Find people & posts"],
-                        ["notifications", "Check alerts"],
+                        ["notifications", "Check notifications"],
                         ["learn", "Browse courses"],
                         ["shop", "Explore shop"],
                         ["chat", "Open messages"],
@@ -226,10 +196,10 @@ export default function AppShellPage() {
                           setAuthorView(null);
                           setTab(id);
                         }}
-                        className="liquid-press flex w-full items-center justify-between rounded-[16px] border border-transparent px-2.5 py-2.5 text-left text-[14px] font-medium text-navy/80 hover:border-white/70 hover:bg-white/55"
+                        className="liquid-press flex w-full items-center justify-between rounded-[14px] px-2.5 py-2.5 text-left text-[13.5px] font-medium text-navy/75 transition hover:bg-white/75 hover:text-navy"
                       >
                         {label}
-                        <span className="text-muted">→</span>
+                        <span className="text-[12px] text-muted/70">→</span>
                       </button>
                     ))}
                   </div>
@@ -269,8 +239,6 @@ function tabLabel(tab: AppTab) {
       return "Profile";
     case "notifications":
       return "Notifications";
-    case "menu":
-      return "More";
   }
 }
 

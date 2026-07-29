@@ -118,6 +118,15 @@ export type UserProfile = {
   isFollowed: boolean;
 };
 
+export type ProfileListUser = {
+  id: string;
+  username?: string | null;
+  fullName?: string | null;
+  avatar?: string | null;
+  role?: string | null;
+  isFollowed: boolean;
+};
+
 export type AppNotification = {
   id: string;
   title: string;

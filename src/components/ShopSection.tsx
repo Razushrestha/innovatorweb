@@ -323,7 +323,7 @@ export function ShopSection() {
   }
 
   return (
-    <div className="relative space-y-5 pb-24 lg:pb-8">
+    <div className="hub-list relative space-y-5 pb-24 lg:pb-8">
       <div className="stagger-in" style={{ animationDelay: "0ms" }}>
         <HubCarousel
           slides={slides}
@@ -336,19 +336,26 @@ export function ShopSection() {
 
       <div className="stagger-in" style={{ animationDelay: "60ms" }}>
         <TrustStrip
-          items={["Secure checkout", "Instant access", "7 days refund"]}
+          items={[
+            { label: "Secure checkout", icon: "secure" },
+            { label: "Instant access", icon: "instant" },
+            { label: "7 days refund", icon: "refund" },
+          ]}
         />
       </div>
 
-      <div
-        className="stagger-in liquid-glass p-3"
-        style={{ animationDelay: "100ms" }}
-      >
+      <div className="stagger-in relative" style={{ animationDelay: "100ms" }}>
+        <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-navy/35">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+            <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        </span>
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search products…"
-          className="glass-field"
+          className="w-full rounded-full border border-navy/[0.07] bg-white py-3 pl-10 pr-4 text-[14px] text-navy outline-none transition placeholder:text-muted focus:border-gold/50 focus:ring-2 focus:ring-gold/20"
         />
       </div>
 
@@ -386,13 +393,13 @@ export function ShopSection() {
             onAction={q ? () => setQ("") : undefined}
           />
         ) : (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="hub-grid">
             {filtered.map((p, i) => {
               const justAdded = !!added[p.id];
               return (
                 <article
                   key={p.id}
-                  className="stagger-in liquid-glass overflow-hidden"
+                  className="hub-card stagger-in overflow-hidden rounded-[22px]"
                   style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
                 >
                   <button

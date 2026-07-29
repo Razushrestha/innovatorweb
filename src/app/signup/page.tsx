@@ -56,15 +56,12 @@ export default function SignupPage() {
       <main className="flex min-h-dvh items-center justify-center px-5 py-10">
         <div className="animate-fade-up liquid-glass w-full max-w-md space-y-5 p-6 sm:p-8">
           <div className="flex flex-col items-center text-center">
-            <BrandMark size={52} />
-            <p className="mt-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-gold">
+            <BrandMark size={72} variant="soft" priority />
+            <h1 className="mt-4 font-display text-[32px] font-extrabold tracking-[-0.045em] text-navy">
               Innovator
-            </p>
-            <h1 className="mt-1 font-display text-[26px] font-extrabold tracking-[-0.03em] text-navy">
-              Create account
             </h1>
-            <p className="mt-1 text-[13.5px] text-muted">
-              Join and start sharing with the community
+            <p className="mt-1 text-[14px] font-medium text-muted">
+              Create your account and join the community
             </p>
           </div>
 

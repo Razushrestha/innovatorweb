@@ -12,6 +12,7 @@ export default {
         navy: "var(--navy)",
         gold: "var(--gold)",
         canvas: "var(--canvas)",
+        surface: "var(--surface)",
         ink: "var(--ink)",
         muted: "var(--muted)",
         like: "var(--like)",

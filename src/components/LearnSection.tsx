@@ -192,7 +192,7 @@ export function LearnSection() {
   }
 
   return (
-    <div className="space-y-5 pb-8">
+    <div className="hub-list space-y-5 pb-8">
       <div className="stagger-in" style={{ animationDelay: "0ms" }}>
         <HubCarousel
           slides={slides}
@@ -205,29 +205,36 @@ export function LearnSection() {
 
       <div className="stagger-in" style={{ animationDelay: "60ms" }}>
         <TrustStrip
-          items={["Certificates", "Expert mentors", "7 days refund"]}
+          items={[
+            { label: "Certificates", icon: "certificate" },
+            { label: "Expert mentors", icon: "mentor" },
+            { label: "7 days refund", icon: "refund" },
+          ]}
         />
       </div>
 
-      <div
-        className="stagger-in liquid-glass p-3"
-        style={{ animationDelay: "100ms" }}
-      >
+      <div className="stagger-in relative" style={{ animationDelay: "100ms" }}>
+        <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-navy/35">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+            <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        </span>
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search courses…"
-          className="glass-field"
+          className="w-full rounded-full border border-navy/[0.07] bg-white py-3 pl-10 pr-4 text-[14px] text-navy outline-none transition placeholder:text-muted focus:border-gold/50 focus:ring-2 focus:ring-gold/20"
         />
       </div>
 
       <div className="stagger-in" style={{ animationDelay: "140ms" }}>
         <p className="hub-title mb-3">Top selling</p>
-        <div className="flex gap-3 overflow-x-auto liquid-scroll pb-1">
+        <div className="flex gap-3 overflow-x-auto liquid-scroll bg-[var(--canvas)] pb-1">
           {topSelling.slice(0, 6).map((c, i) => (
             <article
               key={c.id}
-              className="liquid-glass w-[196px] shrink-0 overflow-hidden"
+              className="hub-card w-[196px] shrink-0 overflow-hidden rounded-[22px]"
             >
               <button
                 type="button"
@@ -306,11 +313,11 @@ export function LearnSection() {
             onAction={q ? () => setQ("") : undefined}
           />
         ) : (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="hub-grid">
             {filtered.map((c, i) => (
               <article
                 key={c.id}
-                className="stagger-in liquid-glass liquid-press overflow-hidden"
+                className="hub-card stagger-in liquid-press overflow-hidden rounded-[22px]"
                 style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
               >
                 <button
