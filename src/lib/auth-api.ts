@@ -1,10 +1,37 @@
 import { ApiConfig } from "./api-config";
-import { apiRequest } from "./api-client";
+import { ApiException, apiRequest } from "./api-client";
 import { AuthSession } from "./auth-session";
 import { ensureProfile } from "./profile-api";
-import type { AuthResult } from "./types";
+import type { AuthResult, AuthUser } from "./types";
+
+function asAuthResult(raw: unknown): AuthResult {
+  const data = (raw ?? {}) as Record<string, unknown>;
+  const userRaw = (data.user ?? {}) as Record<string, unknown>;
+  const user: AuthUser = {
+    id: String(userRaw.id ?? ""),
+    username: (userRaw.username as string | null) ?? null,
+    email: (userRaw.email as string | null) ?? null,
+    role: (userRaw.role as string | null) ?? null,
+    isEmailVerified:
+      userRaw.is_email_verified === true ||
+      userRaw.isEmailVerified === true,
+  };
+  return {
+    accessToken: String(
+      data.accessToken ?? data.access_token ?? "",
+    ),
+    refreshToken: String(
+      data.refreshToken ?? data.refresh_token ?? "",
+    ),
+    expiresIn: Number(data.expiresIn ?? data.expires_in ?? 0),
+    user,
+  };
+}
 
 function persist(result: AuthResult, fallbackEmail?: string) {
+  if (!result.accessToken || !result.user.id) {
+    throw new ApiException("Login response missing token or user");
+  }
   AuthSession.save({
     accessToken: result.accessToken,
     refreshToken: result.refreshToken,
@@ -26,7 +53,7 @@ async function afterAuth(result: AuthResult, fallbackEmail?: string) {
 }
 
 export async function login(email: string, password: string) {
-  const data = await apiRequest<AuthResult>(
+  const data = await apiRequest<unknown>(
     ApiConfig.authBaseUrl,
     "/api/auth/sso/login",
     {
@@ -35,7 +62,7 @@ export async function login(email: string, password: string) {
       body: { email, password },
     },
   );
-  return afterAuth(data, email);
+  return afterAuth(asAuthResult(data), email);
 }
 
 export async function register(input: {
@@ -43,7 +70,7 @@ export async function register(input: {
   email: string;
   password: string;
 }) {
-  const data = await apiRequest<AuthResult>(
+  const data = await apiRequest<unknown>(
     ApiConfig.authBaseUrl,
     "/api/auth/register",
     {
@@ -58,11 +85,11 @@ export async function register(input: {
       },
     },
   );
-  return afterAuth(data, input.email);
+  return afterAuth(asAuthResult(data), input.email);
 }
 
 export async function loginWithGoogle(googleToken: string) {
-  const data = await apiRequest<AuthResult>(
+  const data = await apiRequest<unknown>(
     ApiConfig.authBaseUrl,
     "/api/auth/sso/google",
     {
@@ -71,7 +98,7 @@ export async function loginWithGoogle(googleToken: string) {
       body: { google_token: googleToken },
     },
   );
-  return afterAuth(data);
+  return afterAuth(asAuthResult(data));
 }
 
 export async function logout() {

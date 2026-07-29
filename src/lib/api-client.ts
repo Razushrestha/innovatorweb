@@ -21,7 +21,16 @@ function buildUrl(
   query?: Record<string, string>,
 ) {
   const endpoint = `${baseUrl.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
-  const finalUrl = new URL(endpoint);
+  // Relative proxy paths (e.g. /api/backend/auth) need an origin.
+  const finalUrl =
+    endpoint.startsWith("http://") || endpoint.startsWith("https://")
+      ? new URL(endpoint)
+      : new URL(
+          endpoint,
+          typeof window !== "undefined"
+            ? window.location.origin
+            : "http://localhost",
+        );
   if (query) {
     Object.entries(query).forEach(([k, v]) => finalUrl.searchParams.set(k, v));
   }
@@ -42,12 +51,19 @@ export async function apiRequest<T>(
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (auth) headers.Authorization = AuthSession.authorizationHeader();
 
-  const res = await fetch(finalUrl.toString(), {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(finalUrl.toString(), {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiException(
+      "Network error — cannot reach the API. Check connection or try again.",
+    );
+  }
 
   if (res.status === 204) {
     return null as T;
@@ -90,12 +106,19 @@ export async function apiMultipart<T>(
   };
   if (auth) headers.Authorization = AuthSession.authorizationHeader();
 
-  const res = await fetch(finalUrl.toString(), {
-    method,
-    headers,
-    body: form,
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(finalUrl.toString(), {
+      method,
+      headers,
+      body: form,
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiException(
+      "Network error — cannot reach the API. Check connection or try again.",
+    );
+  }
 
   const text = await res.text();
   if (!text) {
