@@ -67,5 +67,5 @@ export const ApiConfig = {
   feedPageSize: 15,
   googleClientId:
     process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ??
-    "565447947765-2n94vokrmnc8p6c8k4c8as3krqc8qmgk.apps.googleusercontent.com",
+    "565447947765-a0l1vao21m0n03vh630g40j5t7ev6raj.apps.googleusercontent.com",
 } as const;
