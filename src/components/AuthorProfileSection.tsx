@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { ApiException } from "@/lib/api-client";
 import { AuthSession } from "@/lib/auth-session";
 import { getProfileByAuthUserId } from "@/lib/profile-api";
-import type { UserProfile } from "@/lib/types";
+import type { ChatPeerRequest, UserProfile } from "@/lib/types";
 import { ProfileView } from "./ProfileView";
 import { LiquidError, LiquidLoader } from "./ui/LiquidChrome";
 
@@ -13,6 +13,7 @@ type Props = {
   fallbackName?: string | null;
   onBack: () => void;
   onOpenAuthor?: (userId: string, name?: string | null) => void;
+  onStartChat?: (peer: ChatPeerRequest) => void;
 };
 
 export function AuthorProfileSection({
@@ -20,6 +21,7 @@ export function AuthorProfileSection({
   fallbackName,
   onBack,
   onOpenAuthor,
+  onStartChat,
 }: Props) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,6 +77,7 @@ export function AuthorProfileSection({
       onProfileChange={setProfile}
       onOpenAuthor={onOpenAuthor}
       onBlocked={onBack}
+      onStartChat={onStartChat}
     />
   );
 }

@@ -21,6 +21,7 @@ import { ShopSection } from "@/components/ShopSection";
 import { BrandMark } from "@/components/BrandMark";
 import { logout } from "@/lib/auth-api";
 import { AuthSession } from "@/lib/auth-session";
+import type { ChatPeerRequest } from "@/lib/types";
 
 export default function AppShellPage() {
   const router = useRouter();
@@ -28,10 +29,17 @@ export default function AppShellPage() {
   const [tab, setTab] = useState<AppTab>("feed");
   const [email, setEmail] = useState<string | null>(null);
   const [feedKey, setFeedKey] = useState(0);
+  const [chatPeer, setChatPeer] = useState<ChatPeerRequest | null>(null);
   const [authorView, setAuthorView] = useState<{
     userId: string;
     name?: string | null;
   } | null>(null);
+
+  function startChat(peer: ChatPeerRequest) {
+    setAuthorView(null);
+    setChatPeer(peer);
+    setTab("chat");
+  }
 
   useEffect(() => {
     if (!AuthSession.isSignedIn()) {
@@ -96,6 +104,7 @@ export default function AppShellPage() {
                   onOpenAuthor={(userId, name) =>
                     setAuthorView({ userId, name })
                   }
+                  onStartChat={startChat}
                 />
               ) : null}
 
@@ -125,7 +134,12 @@ export default function AppShellPage() {
                   }
                 />
               ) : null}
-              {!authorView && tab === "chat" ? <ChatSection /> : null}
+              {!authorView && tab === "chat" ? (
+                <ChatSection
+                  pendingPeer={chatPeer}
+                  onPendingPeerConsumed={() => setChatPeer(null)}
+                />
+              ) : null}
               {!authorView && tab === "learn" ? <LearnSection /> : null}
               {!authorView && tab === "shop" ? <ShopSection /> : null}
               {!authorView && tab === "profile" ? (
@@ -133,6 +147,7 @@ export default function AppShellPage() {
                   onOpenAuthor={(userId, name) =>
                     setAuthorView({ userId, name })
                   }
+                  onStartChat={startChat}
                 />
               ) : null}
               {!authorView && tab === "notifications" ? (

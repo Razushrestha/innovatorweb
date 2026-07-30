@@ -1041,6 +1041,18 @@ body::-webkit-scrollbar,
     box-shadow: none;
   }
 
+  .profile-chat {
+    min-width: 72px;
+    border-radius: 999px;
+    padding: 0.55rem 1rem;
+    font-size: 13px;
+    font-weight: 750;
+    color: var(--navy);
+    background: #fff;
+    border: 1px solid rgba(244, 180, 0, 0.55);
+    box-shadow: none;
+  }
+
   .profile-block {
     border-radius: 999px;
     padding: 0.55rem 1rem;

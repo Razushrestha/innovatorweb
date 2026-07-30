@@ -3,15 +3,16 @@
 import { useEffect, useState } from "react";
 import { ApiException } from "@/lib/api-client";
 import { getMyProfile } from "@/lib/profile-api";
-import type { UserProfile } from "@/lib/types";
+import type { ChatPeerRequest, UserProfile } from "@/lib/types";
 import { ProfileView } from "./ProfileView";
 import { LiquidError, LiquidLoader } from "./ui/LiquidChrome";
 
 type Props = {
   onOpenAuthor?: (userId: string, name?: string | null) => void;
+  onStartChat?: (peer: ChatPeerRequest) => void;
 };
 
-export function ProfileSection({ onOpenAuthor }: Props) {
+export function ProfileSection({ onOpenAuthor, onStartChat }: Props) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +42,7 @@ export function ProfileSection({ onOpenAuthor }: Props) {
       isOwn
       onProfileChange={setProfile}
       onOpenAuthor={onOpenAuthor}
+      onStartChat={onStartChat}
     />
   );
 }

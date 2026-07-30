@@ -127,6 +127,12 @@ export type ProfileListUser = {
   isFollowed: boolean;
 };
 
+/** Peer to open/create a chat conversation with. */
+export type ChatPeerRequest = {
+  userId: string;
+  username?: string | null;
+};
+
 export type AppNotification = {
   id: string;
   title: string;

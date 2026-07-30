@@ -6,6 +6,10 @@ import { ApiException } from "@/lib/api-client";
 import { getPostsByAuthor } from "@/lib/feed-api";
 import { AuthSession } from "@/lib/auth-session";
 import {
+  isMutualCollaborator,
+  listMutualCollaborators,
+} from "@/lib/mutual-collaborators";
+import {
   blockUser,
   listFollowers,
   listFollowing,
@@ -13,7 +17,12 @@ import {
   updateProfile,
   uploadAvatar,
 } from "@/lib/profile-api";
-import type { FeedPost, ProfileListUser, UserProfile } from "@/lib/types";
+import type {
+  ChatPeerRequest,
+  FeedPost,
+  ProfileListUser,
+  UserProfile,
+} from "@/lib/types";
 import { BrandMark } from "./BrandMark";
 import { FeedCard } from "./FeedCard";
 import { LiquidEmpty, LiquidError, LiquidLoader } from "./ui/LiquidChrome";
@@ -28,6 +37,7 @@ type Props = {
   onProfileChange?: (profile: UserProfile) => void;
   onOpenAuthor?: (userId: string, name?: string | null) => void;
   onBlocked?: () => void;
+  onStartChat?: (peer: ChatPeerRequest) => void;
 };
 
 export function ProfileView({
@@ -37,6 +47,7 @@ export function ProfileView({
   onProfileChange,
   onOpenAuthor,
   onBlocked,
+  onStartChat,
 }: Props) {
   const [local, setLocal] = useState(profile);
   const [titleIndex, setTitleIndex] = useState(0);
@@ -45,6 +56,7 @@ export function ProfileView({
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [canChat, setCanChat] = useState(false);
   const [peopleKind, setPeopleKind] = useState<
     "followers" | "following" | null
   >(null);
@@ -102,6 +114,30 @@ export function ProfileView({
       }
     })();
   }, [local.authUserId, local.id]);
+
+  useEffect(() => {
+    if (isOwn) {
+      setCanChat(false);
+      return;
+    }
+    const target = local.authUserId || local.id;
+    if (!target) {
+      setCanChat(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const ok = await isMutualCollaborator(target);
+        if (!cancelled) setCanChat(ok);
+      } catch {
+        if (!cancelled) setCanChat(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOwn, local.authUserId, local.id, local.isFollowed]);
 
   function cycleTitle() {
     if (!isOwn) return;
@@ -363,6 +399,21 @@ export function ProfileView({
               >
                 {busy ? "…" : local.isFollowed ? "Collaborating" : "Collaborate"}
               </button>
+              {canChat && onStartChat ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    onStartChat({
+                      userId: local.authUserId || local.id,
+                      username: local.username || local.fullName || displayName,
+                    })
+                  }
+                  className="profile-chat liquid-press"
+                >
+                  Chat
+                </button>
+              ) : null}
               <button
                 type="button"
                 disabled={busy}
@@ -481,6 +532,14 @@ export function ProfileView({
             setPeopleKind(null);
             onOpenAuthor?.(id, name);
           }}
+          onStartChat={
+            onStartChat
+              ? (peer) => {
+                  setPeopleKind(null);
+                  onStartChat(peer);
+                }
+              : undefined
+          }
         />
       ) : null}
     </div>
@@ -628,6 +687,7 @@ function PeopleSheet({
   kind,
   onClose,
   onOpenAuthor,
+  onStartChat,
 }: {
   title: string;
   subtitle: string;
@@ -635,13 +695,16 @@ function PeopleSheet({
   kind: "followers" | "following";
   onClose: () => void;
   onOpenAuthor?: (userId: string, name?: string | null) => void;
+  onStartChat?: (peer: ChatPeerRequest) => void;
 }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<ProfileListUser[]>([]);
+  const [mutualIds, setMutualIds] = useState<Set<string>>(new Set());
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const myUserId = AuthSession.load().userId;
+  const viewingOwnList = !authUserId || authUserId === myUserId;
 
   useEffect(() => {
     void (async () => {
@@ -649,11 +712,14 @@ function PeopleSheet({
       setError(null);
       setActionError(null);
       try {
-        setUsers(
-          await (kind === "followers"
+        const [list, mutual] = await Promise.all([
+          kind === "followers"
             ? listFollowers(authUserId)
-            : listFollowing(authUserId)),
-        );
+            : listFollowing(authUserId),
+          listMutualCollaborators().catch(() => [] as ProfileListUser[]),
+        ]);
+        setUsers(list);
+        setMutualIds(new Set(mutual.map((u) => u.id).filter(Boolean)));
       } catch (e) {
         setError(e instanceof ApiException ? e.message : "Could not load list");
       } finally {
@@ -677,6 +743,21 @@ function PeopleSheet({
           u.id === user.id ? { ...u, isFollowed: result.isFollowing } : u,
         ),
       );
+      // Own Collaborators + follow back ⇒ mutual chat unlocks.
+      if (viewingOwnList && kind === "followers") {
+        setMutualIds((prevSet) => {
+          const next = new Set(prevSet);
+          if (result.isFollowing) next.add(user.id);
+          else next.delete(user.id);
+          return next;
+        });
+      } else if (viewingOwnList && kind === "following" && !result.isFollowing) {
+        setMutualIds((prevSet) => {
+          const next = new Set(prevSet);
+          next.delete(user.id);
+          return next;
+        });
+      }
     } catch (e) {
       setUsers((list) =>
         list.map((u) => (u.id === user.id ? { ...u, isFollowed: prev } : u)),
@@ -734,12 +815,13 @@ function PeopleSheet({
                 u.fullName?.trim() || u.username?.trim() || "Innovator";
               const letter = name.slice(0, 1).toUpperCase();
               const isSelf = Boolean(myUserId && u.id === myUserId);
-              const viewingOwnList = !authUserId || authUserId === myUserId;
               const label = u.isFollowed
                 ? "Collaborating"
                 : kind === "followers" && viewingOwnList
                   ? "Follow back"
                   : "Collaborate";
+              const showChat =
+                Boolean(onStartChat) && !isSelf && mutualIds.has(u.id);
               return (
                 <div
                   key={u.id}
@@ -777,19 +859,36 @@ function PeopleSheet({
                     </span>
                   </button>
                   {!isSelf ? (
-                    <button
-                      type="button"
-                      disabled={busyId === u.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void onToggleFollow(u);
-                      }}
-                      className={`profile-follow liquid-press shrink-0 !min-w-0 !px-3 !py-1.5 !text-[12px] ${
-                        u.isFollowed ? "on" : ""
-                      }`}
-                    >
-                      {busyId === u.id ? "…" : label}
-                    </button>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {showChat ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onStartChat?.({
+                              userId: u.id,
+                              username: u.username || name,
+                            });
+                          }}
+                          className="profile-chat liquid-press !min-w-0 !px-3 !py-1.5 !text-[12px]"
+                        >
+                          Chat
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        disabled={busyId === u.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void onToggleFollow(u);
+                        }}
+                        className={`profile-follow liquid-press !min-w-0 !px-3 !py-1.5 !text-[12px] ${
+                          u.isFollowed ? "on" : ""
+                        }`}
+                      >
+                        {busyId === u.id ? "…" : label}
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               );

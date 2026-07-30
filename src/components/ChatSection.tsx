@@ -21,7 +21,17 @@ import {
   peerOf,
   sendMessage,
 } from "@/lib/chat-api";
-import type { ChatConversation, ChatMessage, ChatParticipant } from "@/lib/types";
+import {
+  isMutualCollaborator,
+  listMutualCollaborators,
+} from "@/lib/mutual-collaborators";
+import type {
+  ChatConversation,
+  ChatMessage,
+  ChatParticipant,
+  ChatPeerRequest,
+  ProfileListUser,
+} from "@/lib/types";
 import { BrandMark } from "./BrandMark";
 import { LiquidLoader } from "./ui/LiquidChrome";
 
@@ -98,15 +108,23 @@ function PeerAvatar({
   );
 }
 
-export function ChatSection() {
+type Props = {
+  pendingPeer?: ChatPeerRequest | null;
+  onPendingPeerConsumed?: () => void;
+};
+
+export function ChatSection({
+  pendingPeer = null,
+  onPendingPeerConsumed,
+}: Props) {
   const me = AuthSession.load().userId;
   const [rooms, setRooms] = useState<ChatConversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [peerId, setPeerId] = useState("");
-  const [peerNameInput, setPeerNameInput] = useState("");
   const [showNew, setShowNew] = useState(false);
+  const [mutualPeers, setMutualPeers] = useState<ProfileListUser[]>([]);
+  const [mutualLoading, setMutualLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
@@ -114,6 +132,7 @@ export function ChatSection() {
   const [query, setQuery] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const pendingKey = pendingPeer?.userId ?? "";
 
   const active = useMemo(
     () => rooms.find((r) => r.id === activeId) ?? null,
@@ -196,6 +215,75 @@ export function ChatSection() {
     }
   }
 
+  async function startChatWith(userId: string, username?: string | null) {
+    if (!userId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const mutual = await isMutualCollaborator(userId);
+      if (!mutual) {
+        setError("Chat is only available with mutual collaborators.");
+        return;
+      }
+
+      let list = await listConversations();
+      setRooms(list);
+      let room = list.find((r) => peerOf(r, me)?.userId === userId) ?? null;
+      if (!room) {
+        room = await createConversation({
+          participantUserId: userId,
+          participantUsername: username?.trim() || undefined,
+        });
+        list = await listConversations();
+        setRooms(list);
+        room = list.find((r) => r.id === room!.id) ?? room;
+      }
+
+      setActiveId(room.id);
+      setMessages([]);
+      const msgs = await listMessages(room.id);
+      setMessages([...msgs].reverse());
+      void markRead(room.id);
+      setRooms((prev) =>
+        prev.map((r) => (r.id === room!.id ? { ...r, unreadCount: 0 } : r)),
+      );
+      window.setTimeout(() => {
+        composerRef.current?.focus();
+        resizeComposer();
+      }, 80);
+    } catch (err) {
+      setError(
+        err instanceof ApiException ? err.message : "Could not start chat",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!pendingKey) return;
+    void (async () => {
+      await startChatWith(pendingKey, pendingPeer?.username);
+      onPendingPeerConsumed?.();
+    })();
+    // Intentionally only when a new pending peer arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingKey]);
+
+  useEffect(() => {
+    if (!showNew) return;
+    setMutualLoading(true);
+    void (async () => {
+      try {
+        setMutualPeers(await listMutualCollaborators());
+      } catch {
+        setMutualPeers([]);
+      } finally {
+        setMutualLoading(false);
+      }
+    })();
+  }, [showNew]);
+
   async function onSend(e?: FormEvent) {
     e?.preventDefault();
     if (!activeId || !draft.trim() || sending) return;
@@ -232,29 +320,6 @@ export function ChatSection() {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void onSend();
-    }
-  }
-
-  async function onCreate(e: FormEvent) {
-    e.preventDefault();
-    if (!peerId.trim()) return;
-    setBusy(true);
-    try {
-      const room = await createConversation({
-        participantUserId: peerId.trim(),
-        participantUsername: peerNameInput.trim() || undefined,
-      });
-      setShowNew(false);
-      setPeerId("");
-      setPeerNameInput("");
-      await refreshRooms();
-      await openRoom(room.id);
-    } catch (err) {
-      setError(
-        err instanceof ApiException ? err.message : "Could not start chat",
-      );
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -336,7 +401,7 @@ export function ChatSection() {
                 <p className="mx-auto mt-1 max-w-[26ch] text-[12.5px] text-muted">
                   {query
                     ? "Try another name."
-                    : "Start a chat to message someone."}
+                    : "Chat with people who are mutual collaborators."}
                 </p>
                 {!query ? (
                   <button
@@ -418,7 +483,7 @@ export function ChatSection() {
                 Select a conversation
               </p>
               <p className="mt-1.5 max-w-[30ch] text-[14px] leading-relaxed text-muted">
-                Choose someone from the left, or start a new chat.
+                Choose a conversation, or message a mutual collaborator.
               </p>
               <button
                 type="button"
@@ -556,8 +621,7 @@ export function ChatSection() {
           aria-modal="true"
           onClick={() => setShowNew(false)}
         >
-          <form
-            onSubmit={onCreate}
+          <div
             className="profile-sheet-panel p-0"
             onClick={(e) => e.stopPropagation()}
           >
@@ -571,6 +635,9 @@ export function ChatSection() {
                   <h3 className="font-display text-[20px] font-extrabold tracking-[-0.03em] text-navy">
                     New chat
                   </h3>
+                  <p className="mt-0.5 text-[12px] text-muted">
+                    Mutual collaborators only
+                  </p>
                 </div>
               </div>
               <button
@@ -581,49 +648,61 @@ export function ChatSection() {
                 Close
               </button>
             </div>
-            <div className="space-y-3 px-5 py-4">
-              <label className="block space-y-1.5">
-                <span className="pl-1 text-[12.5px] font-semibold text-muted">
-                  Peer user id
-                </span>
-                <input
-                  value={peerId}
-                  onChange={(e) => setPeerId(e.target.value)}
-                  placeholder="UUID of the person"
-                  required
-                  className="glass-field"
-                  autoFocus
-                />
-              </label>
-              <label className="block space-y-1.5">
-                <span className="pl-1 text-[12.5px] font-semibold text-muted">
-                  Display name
-                </span>
-                <input
-                  value={peerNameInput}
-                  onChange={(e) => setPeerNameInput(e.target.value)}
-                  placeholder="Optional"
-                  className="glass-field"
-                />
-              </label>
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowNew(false)}
-                  className="liquid-btn liquid-btn-light flex-1"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={busy}
-                  className="liquid-btn liquid-btn-dark flex-1"
-                >
-                  {busy ? "Starting…" : "Start chat"}
-                </button>
-              </div>
+            <div className="liquid-scroll max-h-[55vh] overflow-y-auto px-3 py-3">
+              {mutualLoading ? <LiquidLoader label="Loading…" /> : null}
+              {!mutualLoading && mutualPeers.length === 0 ? (
+                <p className="px-3 py-10 text-center text-[13.5px] text-muted">
+                  No mutual collaborators yet. Follow back someone in
+                  Collaborators to unlock chat.
+                </p>
+              ) : null}
+              {!mutualLoading &&
+                mutualPeers.map((u) => {
+                  const name =
+                    u.fullName?.trim() || u.username?.trim() || "Innovator";
+                  const letter = name.slice(0, 1).toUpperCase();
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        setShowNew(false);
+                        void startChatWith(u.id, u.username || name);
+                      }}
+                      className="liquid-press flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-left hover:bg-canvas"
+                    >
+                      <span className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-navy text-[14px] font-bold text-white">
+                        {u.avatar ? (
+                          <Image
+                            src={u.avatar}
+                            alt=""
+                            fill
+                            unoptimized
+                            className="object-cover"
+                          />
+                        ) : (
+                          letter
+                        )}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[14px] font-semibold text-navy">
+                          {name}
+                        </span>
+                        {u.username ? (
+                          <span className="block truncate text-[12px] text-muted">
+                            @{u.username}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="profile-chat !min-w-0 !px-3 !py-1.5 !text-[12px]">
+                        Chat
+                      </span>
+                    </button>
+                  );
+                })}
             </div>
-          </form>
+          </div>
         </div>
       ) : null}
     </div>
