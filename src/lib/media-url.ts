@@ -146,10 +146,10 @@ export function toProxiedMediaUrlOrNull(
   return proxied || null;
 }
 
-/** Fix known ecommerce media host quirks, then proxy for HTTPS. */
-export function normalizeShopImageUrl(url: string | null | undefined): string {
+/** Repair common ecommerce media URL bugs from the API. */
+export function repairShopImageUrl(url: string | null | undefined): string {
   if (!url?.trim()) return "";
-  const fixed = url
+  return url
     .trim()
     .replace(
       /^(https?:\/\/36\.253\.137\.34):8004(?=products\/)/i,
@@ -163,5 +163,44 @@ export function normalizeShopImageUrl(url: string | null | undefined): string {
       "https://36.253.137.34:8004products/",
       "https://36.253.137.34:8004/products/",
     );
+}
+
+/**
+ * True when the URL looks like a real product image file (not a bare product-name path).
+ * Many list `image` fields are broken names without extensions — those 404 on :8004.
+ */
+export function isPlausibleShopImageUrl(url: string | null | undefined): boolean {
+  const fixed = repairShopImageUrl(url);
+  if (!fixed) return false;
+  if (!/\.(jpe?g|png|webp|gif)(\?|$)/i.test(fixed)) return false;
+  // Prefer /products/... assets; reject host-root name paths like /Arduino%20nano
+  try {
+    const u = new URL(fixed, "http://local.invalid");
+    return /\/products\//i.test(u.pathname);
+  } catch {
+    return /\/products\/[^/?#]+\.(jpe?g|png|webp|gif)/i.test(fixed);
+  }
+}
+
+/** Fix known ecommerce media host quirks, then proxy for HTTPS. */
+export function normalizeShopImageUrl(url: string | null | undefined): string {
+  const fixed = repairShopImageUrl(url);
+  if (!fixed) return "";
   return toProxiedMediaUrl(fixed, "shopmedia");
+}
+
+/** Prefer the first plausible gallery/cover URL, then proxy it. */
+export function pickShopImageUrl(
+  cover: string | null | undefined,
+  gallery: Array<string | null | undefined> = [],
+): string {
+  for (const candidate of gallery) {
+    if (isPlausibleShopImageUrl(candidate)) {
+      return normalizeShopImageUrl(candidate);
+    }
+  }
+  if (isPlausibleShopImageUrl(cover)) {
+    return normalizeShopImageUrl(cover);
+  }
+  return "";
 }

@@ -1,6 +1,9 @@
 import { ApiConfig } from "./api-config";
 import { apiRequest } from "./api-client";
-import { normalizeShopImageUrl } from "./media-url";
+import {
+  normalizeShopImageUrl,
+  pickShopImageUrl,
+} from "./media-url";
 
 export type ShopCategory = {
   id: string;
@@ -75,11 +78,15 @@ function asProduct(raw: Record<string, unknown>): ShopProduct {
     unknown
   >;
   const galleryRaw = Array.isArray(raw.images) ? raw.images : [];
-  const gallery = galleryRaw
+  const gallerySources = galleryRaw
     .filter((g): g is Record<string, unknown> => !!g && typeof g === "object")
-    .map((g) => normalizeShopImageUrl(String(g.image ?? g.url ?? "")))
+    .map((g) => String(g.image ?? g.url ?? ""))
     .filter(Boolean);
-  const cover = normalizeShopImageUrl(String(raw.image ?? "")) || gallery[0] || "";
+  const coverSource = String(raw.image ?? "");
+  const image = pickShopImageUrl(coverSource, gallerySources);
+  const gallery = gallerySources
+    .map((u) => normalizeShopImageUrl(u))
+    .filter(Boolean);
 
   return {
     id: String(raw.id ?? ""),
@@ -91,9 +98,96 @@ function asProduct(raw: Record<string, unknown>): ShopProduct {
     categoryId: String(raw.category ?? details.id ?? ""),
     category: String(details.name ?? raw.category_name ?? "Shop"),
     categorySlug: String(details.slug ?? ""),
-    image: cover,
-    images: gallery.length ? gallery : cover ? [cover] : [],
+    image,
+    images: gallery.length ? gallery : image ? [image] : [],
   };
+}
+
+/**
+ * List payload omits galleries. Pull detail for a small first page so cards can
+ * auto-scroll multiple photos. Broken files are skipped in the UI via onError
+ * (no HEAD preflight — that flooded the network log).
+ */
+async function enrichProductImages(products: ShopProduct[], limit = 12) {
+  const targets = products
+    .filter((p) => p.images.length <= 1)
+    .slice(0, limit);
+  if (!targets.length) return products;
+
+  const concurrency = 4;
+  for (let i = 0; i < targets.length; i += concurrency) {
+    const batch = targets.slice(i, i + concurrency);
+    await Promise.all(
+      batch.map(async (p) => {
+        try {
+          const detail = await getShopProduct(p.id);
+          const sources = uniqueImages([
+            ...detail.images,
+            detail.image,
+            p.image,
+          ]);
+          const working = await resolveWorkingShopImages(sources);
+          p.images = working;
+          p.image = working[0] ?? "";
+        } catch {
+          // keep list cover
+        }
+      }),
+    );
+  }
+  return products;
+}
+
+function uniqueImages(urls: Array<string | null | undefined>) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of urls) {
+    const u = (raw ?? "").trim();
+    if (!u || seen.has(u)) continue;
+    seen.add(u);
+    out.push(u);
+  }
+  return out;
+}
+
+/** Alternate casings — some hosts are case-sensitive on extensions. */
+function shopImageCandidates(url: string) {
+  const u = url.trim();
+  if (!u) return [] as string[];
+  const alts = new Set<string>([u]);
+  alts.add(u.replace(/\.JPG$/i, ".jpg"));
+  alts.add(u.replace(/\.JPEG$/i, ".jpeg"));
+  alts.add(u.replace(/\.PNG$/i, ".png"));
+  alts.add(u.replace(/\.WEBP$/i, ".webp"));
+  alts.add(u.replace(/\.GIF$/i, ".gif"));
+  return [...alts];
+}
+
+function probeShopImage(url: string) {
+  if (typeof window === "undefined") return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    const img = new window.Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = url;
+  });
+}
+
+/** Keep only media URLs that actually load (drops missing API files). */
+export async function resolveWorkingShopImages(urls: string[]) {
+  const out: string[] = [];
+  const tried = new Set<string>();
+  for (const raw of urls) {
+    for (const candidate of shopImageCandidates(raw)) {
+      if (!candidate || tried.has(candidate)) continue;
+      tried.add(candidate);
+      if (await probeShopImage(candidate)) {
+        out.push(candidate);
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 function asCategory(raw: Record<string, unknown>): ShopCategory {
@@ -169,9 +263,10 @@ export async function listShopProducts(opts?: {
     query: Object.keys(query).length ? query : undefined,
   });
 
-  return unwrapList(data)
+  const products = unwrapList(data)
     .map(asProduct)
     .filter((p) => p.id && p.isActive);
+  return enrichProductImages(products);
 }
 
 export async function getShopProduct(productId: string) {
@@ -181,6 +276,18 @@ export async function getShopProduct(productId: string) {
     { auth: false },
   );
   return asProduct(data);
+}
+
+/** Detail with gallery filtered to images that actually exist on the media host. */
+export async function getShopProductWithGallery(productId: string) {
+  const detail = await getShopProduct(productId);
+  const sources = uniqueImages([...detail.images, detail.image]);
+  const working = await resolveWorkingShopImages(sources);
+  return {
+    ...detail,
+    images: working,
+    image: working[0] ?? "",
+  } satisfies ShopProduct;
 }
 
 export async function getShopCart(imageByProduct?: Map<string, string>) {

@@ -1,14 +1,20 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { ApiException } from "@/lib/api-client";
 import {
   addShopCartItem,
   checkoutShop,
   formatRs,
   getShopCart,
-  getShopProduct,
+  getShopProductWithGallery,
   initiateKhaltiPayment,
   listShopCategories,
   listShopProducts,
@@ -20,8 +26,6 @@ import {
 } from "@/lib/shop-api";
 import { HubCarousel } from "./HubCarousel";
 import { LiquidEmpty, TrustStrip } from "./ui/LiquidChrome";
-
-const PLACEHOLDER = "/shop/product_01.jpg";
 
 type CheckoutForm = {
   fullName: string;
@@ -115,7 +119,7 @@ export function ShopSection() {
     setItems(
       next.map((line) => ({
         ...line,
-        image: line.image || imageByProduct.get(line.productId) || PLACEHOLDER,
+        image: line.image || imageByProduct.get(line.productId) || "",
       })),
     );
   }
@@ -129,10 +133,7 @@ export function ShopSection() {
           setItems(
             next.map((line) => ({
               ...line,
-              image:
-                line.image ||
-                imageByProduct.get(line.productId) ||
-                PLACEHOLDER,
+              image: line.image || imageByProduct.get(line.productId) || "",
             })),
           );
         }
@@ -148,15 +149,18 @@ export function ShopSection() {
   const count = items.reduce((n, i) => n + i.quantity, 0);
   const subtotal = items.reduce((n, i) => n + i.price * i.quantity, 0);
 
-  const slides = products.slice(0, 3).map((p, i) => ({
-    id: p.id,
-    image: p.image || PLACEHOLDER,
-    badge: i === 0 ? "Featured" : i === 1 ? "Popular" : "New",
-    title: p.name,
-    subtitle:
-      p.description.slice(0, 64) + (p.description.length > 64 ? "…" : ""),
-    priceLabel: formatRs(p.price),
-  }));
+  const slides = products
+    .filter((p) => !!p.image)
+    .slice(0, 3)
+    .map((p, i) => ({
+      id: p.id,
+      image: p.image,
+      badge: i === 0 ? "Featured" : i === 1 ? "Popular" : "New",
+      title: p.name,
+      subtitle:
+        p.description.slice(0, 64) + (p.description.length > 64 ? "…" : ""),
+      priceLabel: formatRs(p.price),
+    }));
 
   function flashAdded(productId: string) {
     setAdded((prev) => ({ ...prev, [productId]: true }));
@@ -198,8 +202,15 @@ export function ShopSection() {
     const cached = products.find((p) => p.id === id);
     if (cached) setActive(cached);
     try {
-      const detail = await getShopProduct(id);
+      const detail = await getShopProductWithGallery(id);
       setActive(detail);
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.id === id
+            ? { ...p, image: detail.image, images: detail.images }
+            : p,
+        ),
+      );
     } catch (e) {
       if (!cached) {
         setError(
@@ -328,7 +339,10 @@ export function ShopSection() {
                       {idx + 1}
                     </span>
                     <div className="relative h-14 w-14 overflow-hidden rounded-[14px]">
-                      <ProductImage src={line.image} alt="" />
+                      <ProductImage
+                        sources={[line.image]}
+                        alt=""
+                      />
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-semibold text-navy">
@@ -435,7 +449,6 @@ export function ShopSection() {
 
   if (active) {
     const justAdded = !!added[active.id];
-    const hero = active.images[0] || active.image || PLACEHOLDER;
     return (
       <div className="animate-fade-up space-y-4 pb-8">
         <button
@@ -447,9 +460,11 @@ export function ShopSection() {
         </button>
 
         <div className="liquid-glass overflow-hidden">
-          <div className="relative aspect-[16/10]">
-            <ProductImage src={hero} alt={active.name} />
-          </div>
+          <ProductGallery
+            key={active.id}
+            images={active.images.length ? active.images : [active.image]}
+            alt={active.name}
+          />
           <div className="p-5 sm:p-6">
             <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-muted">
               {active.category}
@@ -628,11 +643,19 @@ export function ShopSection() {
                   >
                     <div className="relative aspect-[0.95] p-2">
                       <div className="relative h-full overflow-hidden rounded-[17px]">
-                        <ProductImage src={p.image || PLACEHOLDER} alt={p.name} />
+                        <ProductCardScroller
+                          images={[...p.images, p.image]}
+                          alt={p.name}
+                        />
                       </div>
                       <span className="absolute right-3.5 top-3.5 rounded-full bg-white/92 px-2 py-0.5 text-[10px] font-bold text-navy shadow-soft">
                         {p.stock > 0 ? `${p.stock} left` : "Sold out"}
                       </span>
+                      {p.images.length > 1 ? (
+                        <span className="absolute bottom-3.5 left-3.5 rounded-full bg-navy/80 px-2 py-0.5 text-[10px] font-bold text-white shadow-soft">
+                          {p.images.length} photos
+                        </span>
+                      ) : null}
                     </div>
                     <div className="px-3 pb-2">
                       <p className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted">
@@ -689,11 +712,330 @@ export function ShopSection() {
   );
 }
 
-function ProductImage({ src, alt }: { src: string; alt: string }) {
-  const [current, setCurrent] = useState(src || PLACEHOLDER);
+function normalizeImageList(sources: Array<string | null | undefined>) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of sources) {
+    const u = (raw ?? "").trim();
+    if (!u || seen.has(u)) continue;
+    seen.add(u);
+    out.push(u);
+  }
+  return out;
+}
+
+function MediaFallback({ label = "No photo" }: { label?: string }) {
+  return (
+    <div className="absolute inset-0 grid place-items-center bg-[var(--media-fallback)] text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
+      {label}
+    </div>
+  );
+}
+
+/** Detail gallery: transform carousel with swipe, arrows, dots, thumbs. */
+function ProductGallery({
+  images,
+  alt,
+}: {
+  images: Array<string | null | undefined>;
+  alt: string;
+}) {
+  const imageKey = (images ?? []).map((x) => String(x ?? "")).join("|");
+  const list = useMemo(
+    () => normalizeImageList(images),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [imageKey],
+  );
+  const [index, setIndex] = useState(0);
+  const [failed, setFailed] = useState<Record<string, boolean>>({});
+  const [paused, setPaused] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ x: number; active: boolean } | null>(null);
+  const [dragX, setDragX] = useState(0);
+
+  const slides = useMemo(
+    () => list.filter((src) => !failed[src]),
+    [list, failed],
+  );
+  const multi = slides.length > 1;
+  const safeIndex = slides.length
+    ? Math.min(index, slides.length - 1)
+    : 0;
+
   useEffect(() => {
-    setCurrent(src || PLACEHOLDER);
-  }, [src]);
+    setIndex(0);
+    setFailed({});
+    setDragX(0);
+    setDragging(false);
+  }, [imageKey]);
+
+  useEffect(() => {
+    if (index > slides.length - 1) setIndex(Math.max(0, slides.length - 1));
+  }, [slides.length, index]);
+
+  useEffect(() => {
+    if (!multi || paused || dragging) return;
+    const t = window.setInterval(() => {
+      setIndex((i) => (i + 1) % slides.length);
+    }, 3600);
+    return () => window.clearInterval(t);
+  }, [multi, paused, dragging, slides.length]);
+
+  function goTo(i: number) {
+    if (!slides.length) return;
+    const next = ((i % slides.length) + slides.length) % slides.length;
+    setIndex(next);
+    setDragX(0);
+    setDragging(false);
+    setPaused(true);
+    window.setTimeout(() => setPaused(false), 5000);
+  }
+
+  function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!multi) return;
+    dragRef.current = { x: e.clientX, active: true };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDragging(true);
+    setPaused(true);
+  }
+
+  function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!dragRef.current?.active) return;
+    setDragX(e.clientX - dragRef.current.x);
+  }
+
+  function onPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!dragRef.current?.active) return;
+    const dx = e.clientX - dragRef.current.x;
+    dragRef.current = null;
+    setDragging(false);
+    const threshold = 48;
+    if (dx <= -threshold) goTo(safeIndex + 1);
+    else if (dx >= threshold) goTo(safeIndex - 1);
+    else {
+      setDragX(0);
+      window.setTimeout(() => setPaused(false), 5000);
+    }
+  }
+
+  if (!slides.length) {
+    return (
+      <div className="relative aspect-[16/10]">
+        <MediaFallback />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2.5">
+      <div
+        className="relative aspect-[16/10] cursor-grab overflow-hidden bg-[var(--media-fallback)] select-none active:cursor-grabbing"
+        style={{ touchAction: "none" }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => {
+          if (!dragRef.current?.active) setPaused(false);
+        }}
+      >
+        <div
+          className="relative h-full w-full ease-out"
+          style={{
+            transform: `translate3d(calc(${-safeIndex * 100}% + ${dragX}px), 0, 0)`,
+            transition: dragging
+              ? "none"
+              : "transform 320ms cubic-bezier(0.22, 1, 0.36, 1)",
+          }}
+        >
+          {slides.map((src, slide) => (
+            <div
+              key={`${src}-${slide}`}
+              className="absolute inset-0"
+              style={{ transform: `translate3d(${slide * 100}%, 0, 0)` }}
+            >
+              {/* Only mount nearby slides so missing API files aren't all requested at once. */}
+              {Math.abs(slide - safeIndex) <= 1 ? (
+                <Image
+                  src={src}
+                  alt={`${alt} ${slide + 1}`}
+                  fill
+                  draggable={false}
+                  unoptimized
+                  className="pointer-events-none object-cover"
+                  onError={() =>
+                    setFailed((prev) => ({ ...prev, [src]: true }))
+                  }
+                />
+              ) : null}
+            </div>
+          ))}
+        </div>
+
+        {multi ? (
+          <>
+            <button
+              type="button"
+              aria-label="Previous image"
+              className="absolute left-2 top-1/2 z-[2] grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-white/92 text-lg font-bold text-navy shadow-soft"
+              onClick={(e) => {
+                e.stopPropagation();
+                goTo(safeIndex - 1);
+              }}
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              aria-label="Next image"
+              className="absolute right-2 top-1/2 z-[2] grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-white/92 text-lg font-bold text-navy shadow-soft"
+              onClick={(e) => {
+                e.stopPropagation();
+                goTo(safeIndex + 1);
+              }}
+            >
+              ›
+            </button>
+            <span className="pointer-events-none absolute bottom-2.5 right-2.5 z-[2] rounded-full bg-navy/80 px-2.5 py-0.5 text-[11px] font-bold text-white">
+              {safeIndex + 1}/{slides.length}
+            </span>
+          </>
+        ) : null}
+      </div>
+
+      {multi ? (
+        <>
+          <div className="flex items-center justify-center gap-1.5 px-3">
+            {slides.map((src, i) => (
+              <button
+                key={`dot-${src}-${i}`}
+                type="button"
+                aria-label={`Image ${i + 1}`}
+                onClick={() => goTo(i)}
+                className={`hub-dot ${i === safeIndex ? "hub-dot-active" : ""}`}
+              />
+            ))}
+          </div>
+          <div className="flex gap-2 overflow-x-auto px-3 pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {slides.map((src, i) => (
+              <button
+                key={`thumb-${src}-${i}`}
+                type="button"
+                onClick={() => goTo(i)}
+                className={`relative h-14 w-14 shrink-0 overflow-hidden rounded-[12px] border-2 transition ${
+                  i === safeIndex
+                    ? "border-gold shadow-soft"
+                    : "border-white/70 opacity-75"
+                }`}
+              >
+                <Image
+                  src={src}
+                  alt=""
+                  fill
+                  unoptimized
+                  className="object-cover"
+                />
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** Grid card: cycles through product photos when multiple exist. */
+function ProductCardScroller({
+  images,
+  alt,
+}: {
+  images: Array<string | null | undefined>;
+  alt: string;
+}) {
+  const imageKey = (images ?? []).map((x) => String(x ?? "")).join("|");
+  const list = useMemo(
+    () => normalizeImageList(images),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [imageKey],
+  );
+  const [index, setIndex] = useState(0);
+  const [failed, setFailed] = useState<Record<string, boolean>>({});
+
+  const slides = useMemo(
+    () => list.filter((src) => !failed[src]),
+    [list, failed],
+  );
+  const multi = slides.length > 1;
+  const safeIndex = slides.length ? Math.min(index, slides.length - 1) : 0;
+
+  useEffect(() => {
+    setIndex(0);
+    setFailed({});
+  }, [imageKey]);
+
+  useEffect(() => {
+    if (!multi) return;
+    const t = window.setInterval(() => {
+      setIndex((i) => (i + 1) % slides.length);
+    }, 2800);
+    return () => window.clearInterval(t);
+  }, [multi, slides.length]);
+
+  if (!slides.length) return <MediaFallback />;
+
+  const src = slides[safeIndex]!;
+
+  return (
+    <>
+      <Image
+        key={src}
+        src={src}
+        alt={alt}
+        fill
+        unoptimized
+        className="object-cover transition-opacity duration-500"
+        onError={() => {
+          setFailed((prev) => ({ ...prev, [src]: true }));
+          if (multi) setIndex((i) => (i + 1) % slides.length);
+        }}
+      />
+      {multi ? (
+        <span className="absolute bottom-2 left-1/2 z-[1] flex -translate-x-1/2 gap-1">
+          {slides.map((s, i) => (
+            <span
+              key={s}
+              className={`h-1 rounded-full transition ${
+                i === safeIndex ? "w-3 bg-white" : "w-1 bg-white/55"
+              }`}
+            />
+          ))}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+function ProductImage({
+  sources,
+  alt,
+}: {
+  sources: Array<string | null | undefined>;
+  alt: string;
+}) {
+  const list = useMemo(() => normalizeImageList(sources), [sources]);
+  const [index, setIndex] = useState(0);
+  const [exhausted, setExhausted] = useState(false);
+
+  useEffect(() => {
+    setIndex(0);
+    setExhausted(false);
+  }, [list.join("|")]);
+
+  if (!list.length || exhausted) return <MediaFallback />;
+
+  const current = list[Math.min(index, list.length - 1)]!;
+
   return (
     <Image
       src={current}
@@ -701,7 +1043,10 @@ function ProductImage({ src, alt }: { src: string; alt: string }) {
       fill
       unoptimized
       className="object-cover"
-      onError={() => setCurrent(PLACEHOLDER)}
+      onError={() => {
+        if (index + 1 < list.length) setIndex((i) => i + 1);
+        else setExhausted(true);
+      }}
     />
   );
 }
