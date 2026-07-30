@@ -58,6 +58,15 @@ export const AuthSession = {
     localStorage.setItem(KEYS.email, input.email);
   },
 
+  /** Update tokens after refresh; keeps existing refresh if the server omits a new one. */
+  updateTokens(input: { accessToken: string; refreshToken?: string | null }) {
+    if (!canUseStorage()) return;
+    localStorage.setItem(KEYS.access, input.accessToken);
+    if (input.refreshToken) {
+      localStorage.setItem(KEYS.refresh, input.refreshToken);
+    }
+  },
+
   clear() {
     if (!canUseStorage()) return;
     Object.values(KEYS).forEach((k) => localStorage.removeItem(k));

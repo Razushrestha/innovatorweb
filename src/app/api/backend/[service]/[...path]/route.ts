@@ -21,7 +21,6 @@ const HOP_BY_HOP = new Set([
   "transfer-encoding",
   "upgrade",
   "host",
-  "content-length",
 ]);
 
 async function proxy(
@@ -45,11 +44,16 @@ async function proxy(
 
   const headers = new Headers();
   req.headers.forEach((value, key) => {
-    if (!HOP_BY_HOP.has(key.toLowerCase())) {
+    const lower = key.toLowerCase();
+    // Drop content-length on the outbound request; fetch sets it from body.
+    if (!HOP_BY_HOP.has(lower) && lower !== "content-length") {
       headers.set(key, value);
     }
   });
-  headers.set("Accept", "application/json");
+  // Do not force application/json — media (<img>/<video>) sends image/*, */*, etc.
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "*/*");
+  }
 
   const method = req.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
@@ -76,10 +80,25 @@ async function proxy(
   const responseHeaders = new Headers();
   upstream.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
+    // Keep Content-Length for media/players; drop hop-by-hop + encoding.
     if (!HOP_BY_HOP.has(lower) && lower !== "content-encoding") {
       responseHeaders.set(key, value);
     }
   });
+
+  // Help browsers play proxied video (Range) and cache static media briefly.
+  if (!responseHeaders.has("Accept-Ranges") && method === "GET") {
+    responseHeaders.set("Accept-Ranges", "bytes");
+  }
+  const contentType = (responseHeaders.get("Content-Type") ?? "").toLowerCase();
+  const isMedia =
+    contentType.startsWith("image/") ||
+    contentType.startsWith("video/") ||
+    contentType.startsWith("audio/") ||
+    contentType === "application/octet-stream";
+  if (isMedia && !responseHeaders.has("Cache-Control")) {
+    responseHeaders.set("Cache-Control", "public, max-age=300");
+  }
 
   return new NextResponse(upstream.body, {
     status: upstream.status,
@@ -91,6 +110,11 @@ async function proxy(
 type Ctx = { params: Promise<{ service: string; path: string[] }> };
 
 export async function GET(req: NextRequest, ctx: Ctx) {
+  const { service, path } = await ctx.params;
+  return proxy(req, service, path);
+}
+
+export async function HEAD(req: NextRequest, ctx: Ctx) {
   const { service, path } = await ctx.params;
   return proxy(req, service, path);
 }

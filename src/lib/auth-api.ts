@@ -1,5 +1,5 @@
 import { ApiConfig } from "./api-config";
-import { ApiException, apiRequest } from "./api-client";
+import { ApiException, apiRequest, refreshAccessToken } from "./api-client";
 import { AuthSession } from "./auth-session";
 import { ensureProfile } from "./profile-api";
 import type { AuthResult, AuthUser } from "./types";
@@ -101,10 +101,21 @@ export async function loginWithGoogle(googleToken: string) {
   return afterAuth(asAuthResult(data));
 }
 
+export async function refreshSession() {
+  const ok = await refreshAccessToken();
+  if (!ok) {
+    throw new ApiException("Unable to refresh session");
+  }
+}
+
 export async function logout() {
+  const { refreshToken } = AuthSession.load();
   try {
     await apiRequest(ApiConfig.authBaseUrl, "/api/auth/logout", {
       method: "POST",
+      auth: false,
+      skipRefresh: true,
+      body: { refreshToken },
     });
   } catch {
     // ignore network logout failures

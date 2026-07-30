@@ -1,5 +1,6 @@
 import { ApiConfig } from "./api-config";
 import { apiRequest } from "./api-client";
+import { toProxiedMediaUrlOrNull } from "./media-url";
 import type { AppNotification } from "./types";
 
 function asNotification(raw: Record<string, unknown>): AppNotification {
@@ -9,7 +10,10 @@ function asNotification(raw: Record<string, unknown>): AppNotification {
     message: String(raw.message ?? raw.body ?? ""),
     type: (raw.type as string | null) ?? null,
     senderUsername: (raw.sender_username as string | null) ?? null,
-    senderAvatar: (raw.sender_avatar as string | null) ?? null,
+    senderAvatar: toProxiedMediaUrlOrNull(
+      (raw.sender_avatar as string | null) ?? null,
+      "profile",
+    ),
     relatedPostId:
       (raw.related_post_id as string | null) ??
       (raw.relatedPostId as string | null) ??

@@ -1,5 +1,6 @@
 import { ApiConfig } from "./api-config";
 import { apiMultipart, apiRequest } from "./api-client";
+import { toProxiedMediaUrl, toProxiedMediaUrlOrNull } from "./media-url";
 import type {
   FeedCategory,
   FeedComment,
@@ -14,9 +15,12 @@ function asMedia(raw: unknown): FeedMediaItem[] {
     .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
     .map((m) => ({
       id: String(m.id ?? ""),
-      file: String(m.file ?? ""),
+      file: toProxiedMediaUrl(String(m.file ?? ""), "feed"),
       mediaType: (m.media_type ?? m.mediaType ?? m.type) as string | null,
-      thumbnail: (m.thumbnail as string | null) ?? null,
+      thumbnail: toProxiedMediaUrlOrNull(
+        (m.thumbnail as string | null) ?? null,
+        "feed",
+      ),
     }));
 }
 
@@ -25,7 +29,10 @@ export function asPost(raw: Record<string, unknown>): FeedPost {
     id: String(raw.id ?? ""),
     userId: String(raw.user_id ?? raw.userId ?? ""),
     username: (raw.username as string | null) ?? null,
-    avatar: (raw.avatar as string | null) ?? null,
+    avatar: toProxiedMediaUrlOrNull(
+      (raw.avatar as string | null) ?? null,
+      "profile",
+    ),
     content: (raw.content as string | null) ?? null,
     media: asMedia(raw.media),
     reactionsCount: Number(raw.reactions_count ?? raw.reactionsCount ?? 0),
@@ -157,7 +164,10 @@ export async function getComments(postId: string, page = 1) {
     .map((c) => ({
       id: String(c.id ?? ""),
       username: (c.username as string | null) ?? null,
-      avatar: (c.avatar as string | null) ?? null,
+      avatar: toProxiedMediaUrlOrNull(
+        (c.avatar as string | null) ?? null,
+        "profile",
+      ),
       content: (c.content as string | null) ?? null,
       createdAt:
         (c.created_at as string | null) ??
@@ -178,7 +188,10 @@ export async function createComment(postId: string, content: string) {
   return {
     id: String(data.id ?? ""),
     username: (data.username as string | null) ?? null,
-    avatar: (data.avatar as string | null) ?? null,
+    avatar: toProxiedMediaUrlOrNull(
+      (data.avatar as string | null) ?? null,
+      "profile",
+    ),
     content: (data.content as string | null) ?? null,
     createdAt:
       (data.created_at as string | null) ??

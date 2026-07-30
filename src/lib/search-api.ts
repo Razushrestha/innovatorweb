@@ -1,5 +1,6 @@
 import { ApiConfig } from "./api-config";
 import { apiRequest } from "./api-client";
+import { toProxiedMediaUrlOrNull } from "./media-url";
 import type { SearchPostHit, SearchUserHit } from "./types";
 
 function asUsers(raw: unknown): SearchUserHit[] {
@@ -9,7 +10,10 @@ function asUsers(raw: unknown): SearchUserHit[] {
     .map((u) => ({
       id: String(u.id ?? u.auth_user_id ?? u.authUserId ?? ""),
       username: String(u.username ?? u.name ?? "User"),
-      avatar: (u.avatar as string | null) ?? null,
+      avatar: toProxiedMediaUrlOrNull(
+        (u.avatar as string | null) ?? null,
+        "profile",
+      ),
       bio: (u.bio as string | null) ?? null,
     }));
 }

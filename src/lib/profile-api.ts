@@ -1,5 +1,6 @@
 import { ApiConfig } from "./api-config";
 import { apiMultipart, apiRequest } from "./api-client";
+import { toProxiedMediaUrl, toProxiedMediaUrlOrNull } from "./media-url";
 import type { ProfileListUser, UserProfile } from "./types";
 
 function asProfile(raw: Record<string, unknown>): UserProfile {
@@ -14,7 +15,10 @@ function asProfile(raw: Record<string, unknown>): UserProfile {
     email: (raw.email as string | null) ?? null,
     role: (raw.role as string | null) ?? null,
     bio: (raw.bio as string | null) ?? null,
-    avatar: (raw.avatar as string | null) ?? null,
+    avatar: toProxiedMediaUrlOrNull(
+      (raw.avatar as string | null) ?? null,
+      "profile",
+    ),
     dateOfBirth:
       (raw.date_of_birth as string | null) ??
       (raw.dateOfBirth as string | null) ??
@@ -100,11 +104,14 @@ export async function uploadAvatar(file: File) {
     "/api/users/me/avatar",
     form,
   );
-  if (typeof data === "string") return data;
+  if (typeof data === "string") return toProxiedMediaUrl(data, "profile");
   if (data && typeof data === "object" && "avatar" in data) {
-    return String((data as { avatar: string }).avatar);
+    return toProxiedMediaUrl(
+      String((data as { avatar: string }).avatar),
+      "profile",
+    );
   }
-  return String(data ?? "");
+  return toProxiedMediaUrl(String(data ?? ""), "profile");
 }
 
 export async function getProfileByAuthUserId(authUserId: string) {
@@ -149,7 +156,10 @@ function asListUser(raw: Record<string, unknown>): ProfileListUser {
       (raw.full_name as string | null) ??
       (raw.fullName as string | null) ??
       null,
-    avatar: (raw.avatar as string | null) ?? null,
+    avatar: toProxiedMediaUrlOrNull(
+      (raw.avatar as string | null) ?? null,
+      "profile",
+    ),
     role: (raw.role as string | null) ?? null,
     isFollowed: raw.is_followed === true || raw.isFollowed === true,
   };

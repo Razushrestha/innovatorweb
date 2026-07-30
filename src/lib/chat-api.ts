@@ -1,12 +1,16 @@
 import { ApiConfig } from "./api-config";
 import { apiRequest } from "./api-client";
+import { toProxiedMediaUrlOrNull } from "./media-url";
 import type { ChatConversation, ChatMessage } from "./types";
 
 function asParticipant(raw: Record<string, unknown>) {
   return {
     userId: String(raw.user_id ?? raw.userId ?? ""),
     username: (raw.username as string | null) ?? null,
-    avatar: (raw.avatar as string | null) ?? null,
+    avatar: toProxiedMediaUrlOrNull(
+      (raw.avatar as string | null) ?? null,
+      "profile",
+    ),
   };
 }
 
@@ -16,10 +20,16 @@ function asMessage(raw: Record<string, unknown>): ChatMessage {
     conversationId: String(raw.conversation_id ?? raw.conversationId ?? ""),
     senderId: String(raw.sender_id ?? raw.senderId ?? ""),
     senderUsername: (raw.sender_username as string | null) ?? null,
-    senderAvatar: (raw.sender_avatar as string | null) ?? null,
+    senderAvatar: toProxiedMediaUrlOrNull(
+      (raw.sender_avatar as string | null) ?? null,
+      "profile",
+    ),
     content: (raw.content as string | null) ?? null,
     messageType: (raw.message_type as string | null) ?? "text",
-    mediaUrl: (raw.media_url as string | null) ?? null,
+    mediaUrl: toProxiedMediaUrlOrNull(
+      (raw.media_url as string | null) ?? null,
+      "chat",
+    ),
     createdAt:
       (raw.created_at as string | null) ??
       (raw.createdAt as string | null) ??
