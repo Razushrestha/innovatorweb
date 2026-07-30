@@ -28,7 +28,13 @@ import {
   isMutualCollaborator,
   listMutualCollaborators,
 } from "@/lib/mutual-collaborators";
-import { fetchOnlineMap, sendPresenceHeartbeat } from "@/lib/presence";
+import { applyChatUnread, markChatRoomRead } from "@/lib/chat-unread";
+import {
+  fetchOnlineMap,
+  isPeerOnline,
+  isRecentlyActive,
+  sendPresenceHeartbeat,
+} from "@/lib/presence";
 import type {
   ChatConversation,
   ChatMessage,
@@ -114,23 +120,28 @@ function PeerAvatar({
 }) {
   const name = peerName(peer);
   const letter = name.slice(0, 1).toUpperCase();
-  const dot = Math.max(9, Math.round(size * 0.22));
+  const dot = Math.max(10, Math.round(size * 0.24));
   return (
     <span
-      className="chat-avatar chat-avatar-ring relative"
-      style={{ width: size, height: size, fontSize: size * 0.38 }}
+      className="relative inline-flex shrink-0"
+      style={{ width: size, height: size }}
     >
-      {peer?.avatar ? (
-        <Image
-          src={peer.avatar}
-          alt=""
-          fill
-          unoptimized
-          className="object-cover"
-        />
-      ) : (
-        letter
-      )}
+      <span
+        className="chat-avatar chat-avatar-ring"
+        style={{ width: size, height: size, fontSize: size * 0.38 }}
+      >
+        {peer?.avatar ? (
+          <Image
+            src={peer.avatar}
+            alt=""
+            fill
+            unoptimized
+            className="object-cover"
+          />
+        ) : (
+          letter
+        )}
+      </span>
       {online ? (
         <span
           className="chat-online-dot"
@@ -168,10 +179,12 @@ export function ChatSection({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [onlineMap, setOnlineMap] = useState<Record<string, boolean>>({});
+  const [localUnread, setLocalUnread] = useState<Record<string, number>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingKey = pendingPeer?.userId ?? "";
+  const myUsername = AuthSession.load().username;
 
   const active = useMemo(
     () => rooms.find((r) => r.id === activeId) ?? null,
@@ -187,34 +200,53 @@ export function ChatSection({
     return Array.from(new Set(ids));
   }, [rooms, me, peer?.userId]);
 
+  const peerUsernames = useMemo(() => {
+    const names = rooms
+      .map((room) => peerOf(room, me)?.username)
+      .filter((n): n is string => Boolean(n?.trim()));
+    if (peer?.username) names.push(peer.username);
+    return Array.from(new Set(names));
+  }, [rooms, me, peer?.username]);
+
+  function peerIsOnline(
+    p?: ChatParticipant | null,
+    room?: ChatConversation | null,
+  ) {
+    if (isPeerOnline(onlineMap, p)) return true;
+    return isRecentlyActive(room?.lastMessage, p?.userId);
+  }
+
   // Keep this user online while Chat is open; poll peers for green dots.
   useEffect(() => {
     if (!me) return;
-    void sendPresenceHeartbeat(me);
+    void sendPresenceHeartbeat(me, myUsername);
     const beat = window.setInterval(() => {
-      void sendPresenceHeartbeat(me);
-    }, 25000);
+      void sendPresenceHeartbeat(me, myUsername);
+    }, 15000);
     return () => window.clearInterval(beat);
-  }, [me]);
+  }, [me, myUsername]);
 
   useEffect(() => {
-    if (peerIds.length === 0) {
+    if (peerIds.length === 0 && peerUsernames.length === 0) {
       setOnlineMap({});
       return;
     }
     let cancelled = false;
     const refresh = () => {
-      void fetchOnlineMap(peerIds).then((map) => {
+      void fetchOnlineMap({
+        userIds: peerIds,
+        usernames: peerUsernames,
+      }).then((map) => {
         if (!cancelled) setOnlineMap(map);
       });
     };
     refresh();
-    const timer = window.setInterval(refresh, 15000);
+    const timer = window.setInterval(refresh, 8000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [peerIds]);
+  }, [peerIds, peerUsernames]);
 
   /** Ensure every mutual collaborator has a conversation row in Messages. */
   const syncMutualRooms = useCallback(async () => {
@@ -293,14 +325,21 @@ export function ChatSection({
         return peerName(peerOf(a, me)).localeCompare(peerName(peerOf(b, me)));
       });
 
-      setRooms(enriched);
+      const unreadById = applyChatUnread(enriched, me, activeId);
+      setLocalUnread(unreadById);
+      setRooms(
+        enriched.map((room) => ({
+          ...room,
+          unreadCount: unreadById[room.id] ?? room.unreadCount,
+        })),
+      );
       setError(null);
     } catch (e) {
       setError(e instanceof ApiException ? e.message : "Could not load chats");
     } finally {
       setLoading(false);
     }
-  }, [me]);
+  }, [me, activeId]);
 
   const refreshRooms = useCallback(async () => {
     await syncMutualRooms();
@@ -308,6 +347,14 @@ export function ChatSection({
 
   useEffect(() => {
     void syncMutualRooms();
+  }, [syncMutualRooms]);
+
+  // Poll inbox so new messages show +1 / +2 badges quickly.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void syncMutualRooms();
+    }, 4000);
+    return () => window.clearInterval(timer);
   }, [syncMutualRooms]);
 
   useEffect(() => {
@@ -332,11 +379,19 @@ export function ChatSection({
             return [...next, ...pending];
           });
           void markRead(activeId);
+          const tip = next[next.length - 1]?.id;
+          markChatRoomRead(activeId, tip);
+          setLocalUnread((prev) => ({ ...prev, [activeId]: 0 }));
+          setRooms((prev) =>
+            prev.map((r) =>
+              r.id === activeId ? { ...r, unreadCount: 0 } : r,
+            ),
+          );
         } catch {
           /* ignore poll errors */
         }
       })();
-    }, 8000);
+    }, 4000);
     return () => window.clearInterval(timer);
   }, [activeId]);
 
@@ -351,13 +406,16 @@ export function ChatSection({
     setActiveId(id);
     setBusy(true);
     setMessages([]);
+    setLocalUnread((prev) => ({ ...prev, [id]: 0 }));
+    setRooms((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, unreadCount: 0 } : r)),
+    );
     try {
       const msgs = await listMessages(id);
-      setMessages([...msgs].reverse());
+      const ordered = [...msgs].reverse();
+      setMessages(ordered);
       void markRead(id);
-      setRooms((prev) =>
-        prev.map((r) => (r.id === id ? { ...r, unreadCount: 0 } : r)),
-      );
+      markChatRoomRead(id, ordered[ordered.length - 1]?.id ?? null);
       window.setTimeout(() => {
         composerRef.current?.focus();
         resizeComposer();
@@ -633,7 +691,11 @@ export function ChatSection({
               filtered.map((room) => {
                 const p = peerOf(room, me);
                 const selected = room.id === activeId;
-                const unread = room.unreadCount > 0;
+                const unreadCount = selected
+                  ? 0
+                  : Math.max(room.unreadCount, localUnread[room.id] ?? 0);
+                const unread = unreadCount > 0;
+                const online = peerIsOnline(p, room);
                 return (
                   <li key={room.id}>
                     <button
@@ -643,11 +705,7 @@ export function ChatSection({
                         selected ? "chat-tile-active" : ""
                       }`}
                     >
-                      <PeerAvatar
-                        peer={p}
-                        size={46}
-                        online={Boolean(p?.userId && onlineMap[p.userId])}
-                      />
+                      <PeerAvatar peer={p} size={46} online={online} />
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center justify-between gap-2">
                           <span
@@ -682,7 +740,7 @@ export function ChatSection({
                         </span>
                       </span>
                       {unread ? (
-                        <span className="chat-unread">{room.unreadCount}</span>
+                        <span className="chat-unread">+{unreadCount}</span>
                       ) : null}
                     </button>
                   </li>
@@ -729,16 +787,14 @@ export function ChatSection({
                 <PeerAvatar
                   peer={peer}
                   size={40}
-                  online={Boolean(peer?.userId && onlineMap[peer.userId])}
+                  online={peerIsOnline(peer, active)}
                 />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-display text-[16px] font-bold tracking-[-0.02em] text-navy">
                     {peerName(peer)}
                   </p>
                   <p className="text-[11.5px] text-muted">
-                    {peer?.userId && onlineMap[peer.userId]
-                      ? "Online"
-                      : "Direct message"}
+                    {peerIsOnline(peer, active) ? "Online" : "Direct message"}
                   </p>
                 </div>
                 <button
@@ -760,7 +816,7 @@ export function ChatSection({
                     <PeerAvatar
                       peer={peer}
                       size={68}
-                      online={Boolean(peer?.userId && onlineMap[peer.userId])}
+                      online={peerIsOnline(peer, active)}
                     />
                     <p className="mt-3.5 font-display text-[18px] font-bold text-navy">
                       {peerName(peer)}

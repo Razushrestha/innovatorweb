@@ -94,13 +94,14 @@ export default function AppShellPage() {
   // Presence heartbeat so chat peers can show a green online dot.
   useEffect(() => {
     if (!ready) return;
-    const userId = AuthSession.load().userId;
+    const session = AuthSession.load();
+    const userId = session.userId;
     if (!userId) return;
-    void sendPresenceHeartbeat(userId);
-    const beat = window.setInterval(() => {
-      void sendPresenceHeartbeat(userId);
-    }, 25000);
-    const onFocus = () => void sendPresenceHeartbeat(userId);
+    const beatOnce = () =>
+      void sendPresenceHeartbeat(userId, session.username);
+    beatOnce();
+    const beat = window.setInterval(beatOnce, 15000);
+    const onFocus = () => beatOnce();
     window.addEventListener("focus", onFocus);
     return () => {
       window.clearInterval(beat);
