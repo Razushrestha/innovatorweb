@@ -4,6 +4,7 @@ import Image from "next/image";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ApiException } from "@/lib/api-client";
 import { getPostsByAuthor } from "@/lib/feed-api";
+import { AuthSession } from "@/lib/auth-session";
 import {
   blockUser,
   listFollowers,
@@ -638,11 +639,15 @@ function PeopleSheet({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<ProfileListUser[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const myUserId = AuthSession.load().userId;
 
   useEffect(() => {
     void (async () => {
       setLoading(true);
       setError(null);
+      setActionError(null);
       try {
         setUsers(
           await (kind === "followers"
@@ -656,6 +661,33 @@ function PeopleSheet({
       }
     })();
   }, [authUserId, kind]);
+
+  async function onToggleFollow(user: ProfileListUser) {
+    if (!user.id || busyId || user.id === myUserId) return;
+    setBusyId(user.id);
+    setActionError(null);
+    const prev = user.isFollowed;
+    setUsers((list) =>
+      list.map((u) => (u.id === user.id ? { ...u, isFollowed: !prev } : u)),
+    );
+    try {
+      const result = await toggleFollow(user.id);
+      setUsers((list) =>
+        list.map((u) =>
+          u.id === user.id ? { ...u, isFollowed: result.isFollowing } : u,
+        ),
+      );
+    } catch (e) {
+      setUsers((list) =>
+        list.map((u) => (u.id === user.id ? { ...u, isFollowed: prev } : u)),
+      );
+      setActionError(
+        e instanceof ApiException ? e.message : "Could not update collaboration",
+      );
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
     <div
@@ -686,6 +718,11 @@ function PeopleSheet({
         <div className="liquid-scroll overflow-y-auto px-3 py-3">
           {loading ? <LiquidLoader label="Loading…" /> : null}
           {!loading && error ? <LiquidError message={error} /> : null}
+          {!loading && actionError ? (
+            <p className="mb-2 px-3 text-center text-[12px] text-red-700">
+              {actionError}
+            </p>
+          ) : null}
           {!loading && !error && users.length === 0 ? (
             <p className="px-3 py-10 text-center text-[13.5px] text-muted">
               No one here yet
@@ -696,39 +733,65 @@ function PeopleSheet({
               const name =
                 u.fullName?.trim() || u.username?.trim() || "Innovator";
               const letter = name.slice(0, 1).toUpperCase();
+              const isSelf = Boolean(myUserId && u.id === myUserId);
+              const viewingOwnList = !authUserId || authUserId === myUserId;
+              const label = u.isFollowed
+                ? "Collaborating"
+                : kind === "followers" && viewingOwnList
+                  ? "Follow back"
+                  : "Collaborate";
               return (
-                <button
+                <div
                   key={u.id}
-                  type="button"
-                  onClick={() => onOpenAuthor?.(u.id, name)}
-                  className="liquid-press flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-left hover:bg-canvas"
+                  className="flex items-center gap-2 rounded-[16px] px-3 py-2.5 hover:bg-canvas"
                 >
-                  <span className="relative h-10 w-10 overflow-hidden rounded-full bg-navy">
-                    {u.avatar ? (
-                      <Image
-                        src={u.avatar}
-                        alt=""
-                        fill
-                        unoptimized
-                        className="object-cover"
-                      />
-                    ) : (
-                      <span className="flex h-full items-center justify-center text-[14px] font-bold text-white">
-                        {letter}
-                      </span>
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14px] font-semibold text-navy">
-                      {name}
+                  <button
+                    type="button"
+                    onClick={() => onOpenAuthor?.(u.id, name)}
+                    className="liquid-press flex min-w-0 flex-1 items-center gap-3 text-left"
+                  >
+                    <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full bg-navy">
+                      {u.avatar ? (
+                        <Image
+                          src={u.avatar}
+                          alt=""
+                          fill
+                          unoptimized
+                          className="object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-full items-center justify-center text-[14px] font-bold text-white">
+                          {letter}
+                        </span>
+                      )}
                     </span>
-                    {u.username ? (
-                      <span className="block truncate text-[12px] text-muted">
-                        @{u.username}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[14px] font-semibold text-navy">
+                        {name}
                       </span>
-                    ) : null}
-                  </span>
-                </button>
+                      {u.username ? (
+                        <span className="block truncate text-[12px] text-muted">
+                          @{u.username}
+                        </span>
+                      ) : null}
+                    </span>
+                  </button>
+                  {!isSelf ? (
+                    <button
+                      type="button"
+                      disabled={busyId === u.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void onToggleFollow(u);
+                      }}
+                      className={`profile-follow liquid-press shrink-0 !min-w-0 !px-3 !py-1.5 !text-[12px] ${
+                        u.isFollowed ? "on" : ""
+                      }`}
+                    >
+                      {busyId === u.id ? "…" : label}
+                    </button>
+                  ) : null}
+                </div>
               );
             })}
         </div>

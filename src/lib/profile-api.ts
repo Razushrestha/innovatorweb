@@ -161,7 +161,11 @@ function asListUser(raw: Record<string, unknown>): ProfileListUser {
       "profile",
     ),
     role: (raw.role as string | null) ?? null,
-    isFollowed: raw.is_followed === true || raw.isFollowed === true,
+    isFollowed:
+      raw.is_followed === true ||
+      raw.isFollowed === true ||
+      raw.is_following === true ||
+      raw.isFollowing === true,
   };
 }
 

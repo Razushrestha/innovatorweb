@@ -110,16 +110,29 @@ export async function refreshSession() {
 }
 
 export async function logout() {
-  const { refreshToken } = AuthSession.load();
   try {
-    await apiRequest(ApiConfig.authBaseUrl, "/api/auth/logout", {
-      method: "POST",
-      auth: false,
-      skipRefresh: true,
-      body: { refreshToken },
-    });
+    const postLogout = () => {
+      const { refreshToken } = AuthSession.load();
+      return apiRequest(ApiConfig.authBaseUrl, "/api/auth/logout", {
+        method: "POST",
+        // Logout needs Bearer; skipRefresh so we control token rotation ourselves.
+        auth: true,
+        skipRefresh: true,
+        body: { refreshToken },
+      });
+    };
+
+    try {
+      await postLogout();
+    } catch (e) {
+      // Stale access token (or rotated refresh) — refresh once, then retry with
+      // the latest tokens from storage.
+      if (!(e instanceof ApiException) || e.status !== 401) throw e;
+      const refreshed = await refreshAccessToken();
+      if (refreshed) await postLogout();
+    }
   } catch {
-    // ignore network logout failures
+    // Always clear local session even if the server rejects logout.
   } finally {
     AuthSession.clear();
   }
