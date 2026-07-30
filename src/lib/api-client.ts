@@ -271,10 +271,16 @@ export async function apiMultipart<T>(
         );
       }
 
-      if (json.data === undefined || json.data === null) {
-        throw new ApiException(json.message || "Empty response", res.status);
+      if (json.data !== undefined && json.data !== null) {
+        return json.data;
       }
-      return json.data;
+
+      // Some services return the entity at the root (no `data` envelope).
+      if (json && typeof json === "object" && "id" in (json as object)) {
+        return json as unknown as T;
+      }
+
+      throw new ApiException(json.message || "Empty response", res.status);
     },
   );
 }

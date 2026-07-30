@@ -34,9 +34,16 @@ type Props = {
   onChange: (tab: AppTab) => void;
   email?: string | null;
   onLogout?: () => void;
+  unreadNotifications?: number;
 };
 
-export function SideNav({ active, onChange, email, onLogout }: Props) {
+export function SideNav({
+  active,
+  onChange,
+  email,
+  onLogout,
+  unreadNotifications = 0,
+}: Props) {
   return (
     <aside className="app-surface liquid-nav-shell hidden h-full w-[232px] shrink-0 flex-col py-5 pl-1 lg:flex xl:w-[248px]">
       <div className="liquid-rail flex h-full min-h-0 flex-col overflow-hidden px-3 py-4">
@@ -59,6 +66,12 @@ export function SideNav({ active, onChange, email, onLogout }: Props) {
         <nav className="liquid-scroll flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pr-0.5">
           {items.map((item) => {
             const selected = active === item.id;
+            const badge =
+              item.id === "notifications" && unreadNotifications > 0
+                ? unreadNotifications > 99
+                  ? "99+"
+                  : String(unreadNotifications)
+                : null;
             return (
               <button
                 key={item.id}
@@ -69,13 +82,18 @@ export function SideNav({ active, onChange, email, onLogout }: Props) {
                 }`}
               >
                 <span
-                  className={`grid h-8 w-8 place-items-center rounded-[12px] transition ${
+                  className={`relative grid h-8 w-8 place-items-center rounded-[12px] transition ${
                     selected
                       ? "bg-white/10 text-gold"
                       : "bg-white/80 text-navy/70 shadow-soft"
                   }`}
                 >
                   {item.icon}
+                  {badge ? (
+                    <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[var(--gold)] px-1 text-[9px] font-bold text-navy">
+                      {badge}
+                    </span>
+                  ) : null}
                 </span>
                 <span className="font-display text-[15px] font-semibold tracking-[-0.02em]">
                   {item.label}

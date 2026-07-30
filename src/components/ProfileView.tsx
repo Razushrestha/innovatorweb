@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ApiException } from "@/lib/api-client";
 import { getPostsByAuthor } from "@/lib/feed-api";
 import { AuthSession } from "@/lib/auth-session";
+import { syncActivityNotifications } from "@/lib/activity-notifications";
 import {
   isMutualCollaborator,
   listMutualCollaborators,
@@ -215,6 +216,7 @@ export function ProfileView({
       };
       setLocal(next);
       onProfileChange?.(next);
+      void syncActivityNotifications();
     } catch (e) {
       setLocal({
         ...local,
@@ -758,6 +760,7 @@ function PeopleSheet({
           return next;
         });
       }
+      void syncActivityNotifications();
     } catch (e) {
       setUsers((list) =>
         list.map((u) => (u.id === user.id ? { ...u, isFollowed: prev } : u)),

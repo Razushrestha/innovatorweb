@@ -9,11 +9,32 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
 } from "@/lib/notifications-api";
-import type { AppNotification } from "@/lib/types";
+import type { AppNotification, NotificationTargetTab } from "@/lib/types";
 import { LiquidError, LiquidLoader } from "./ui/LiquidChrome";
 
 type Filter = "all" | "unread";
-type NotifKind = "like" | "comment" | "collaborate" | "mention" | "system";
+type NotifKind =
+  | "like"
+  | "comment"
+  | "collaborate"
+  | "mention"
+  | "post"
+  | "product"
+  | "learn"
+  | "system";
+
+export type NotificationOpenTarget = {
+  tab?: NotificationTargetTab;
+  userId?: string | null;
+  postId?: string | null;
+  productId?: string | null;
+  courseId?: string | null;
+};
+
+type Props = {
+  onOpenTarget?: (target: NotificationOpenTarget) => void;
+  onUnreadChange?: (count: number) => void;
+};
 
 function timeAgo(iso?: string | null) {
   if (!iso) return "";
@@ -50,8 +71,13 @@ function kindOf(n: AppNotification): NotifKind {
   const blob = `${n.type ?? ""} ${n.title} ${n.message}`.toLowerCase();
   if (/(like|loved|heart|react)/.test(blob)) return "like";
   if (/(comment|replied|reply)/.test(blob)) return "comment";
-  if (/(follow|collab|collaborat|connect)/.test(blob)) return "collaborate";
+  if (/(follow|collab|collaborat|connect|mutual)/.test(blob)) {
+    return "collaborate";
+  }
   if (/(mention|tagged|@)/.test(blob)) return "mention";
+  if (/(product|shop|ecommerce|commerce|order)/.test(blob)) return "product";
+  if (/(learn|course|enroll|e-learning|elearning)/.test(blob)) return "learn";
+  if (/(post|innovation|shared)/.test(blob)) return "post";
   return "system";
 }
 
@@ -65,6 +91,12 @@ function kindLabel(kind: NotifKind) {
       return "Collaborate";
     case "mention":
       return "Mention";
+    case "post":
+      return "Post";
+    case "product":
+      return "Shop";
+    case "learn":
+      return "Learn";
     default:
       return "Update";
   }
@@ -76,7 +108,40 @@ function groupLabel(key: string) {
   return "Earlier";
 }
 
-export function NotificationsSection() {
+function targetFromNotification(n: AppNotification): NotificationOpenTarget {
+  const kind = kindOf(n);
+  if (n.targetTab) {
+    return {
+      tab: n.targetTab,
+      userId: n.relatedUserId,
+      postId: n.relatedPostId,
+      productId: n.relatedProductId,
+      courseId: n.relatedCourseId,
+    };
+  }
+  if (kind === "product") {
+    return { tab: "shop", productId: n.relatedProductId };
+  }
+  if (kind === "learn") {
+    return { tab: "learn", courseId: n.relatedCourseId };
+  }
+  if (kind === "collaborate") {
+    return { tab: n.relatedUserId ? "profile" : "chat", userId: n.relatedUserId };
+  }
+  if (kind === "post") {
+    return {
+      tab: "feed",
+      postId: n.relatedPostId,
+      userId: n.relatedUserId,
+    };
+  }
+  return { tab: "feed", postId: n.relatedPostId, userId: n.relatedUserId };
+}
+
+export function NotificationsSection({
+  onOpenTarget,
+  onUnreadChange,
+}: Props) {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -87,7 +152,9 @@ export function NotificationsSection() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      setItems(await listNotifications());
+      const next = await listNotifications();
+      setItems(next);
+      onUnreadChange?.(next.filter((n) => !n.isRead).length);
       setError(null);
     } catch (e) {
       setError(
@@ -96,11 +163,24 @@ export function NotificationsSection() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [onUnreadChange]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Soft refresh while the tab is open
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void listNotifications()
+        .then((next) => {
+          setItems(next);
+          onUnreadChange?.(next.filter((n) => !n.isRead).length);
+        })
+        .catch(() => undefined);
+    }, 45000);
+    return () => window.clearInterval(timer);
+  }, [onUnreadChange]);
 
   const unread = useMemo(
     () => items.filter((n) => !n.isRead).length,
@@ -130,9 +210,13 @@ export function NotificationsSection() {
     setBusyId(id);
     try {
       await markNotificationRead(id);
-      setItems((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, isRead: true } : x)),
-      );
+      setItems((prev) => {
+        const next = prev.map((x) =>
+          x.id === id ? { ...x, isRead: true } : x,
+        );
+        onUnreadChange?.(next.filter((n) => !n.isRead).length);
+        return next;
+      });
     } finally {
       setBusyId(null);
     }
@@ -144,6 +228,7 @@ export function NotificationsSection() {
     try {
       await markAllNotificationsRead();
       setItems((prev) => prev.map((n) => ({ ...n, isRead: true })));
+      onUnreadChange?.(0);
     } finally {
       setMarkingAll(false);
     }
@@ -153,10 +238,19 @@ export function NotificationsSection() {
     setBusyId(id);
     try {
       await deleteNotification(id);
-      setItems((prev) => prev.filter((x) => x.id !== id));
+      setItems((prev) => {
+        const next = prev.filter((x) => x.id !== id);
+        onUnreadChange?.(next.filter((n) => !n.isRead).length);
+        return next;
+      });
     } finally {
       setBusyId(null);
     }
+  }
+
+  async function onOpen(n: AppNotification) {
+    if (!n.isRead) await onMarkRead(n.id);
+    onOpenTarget?.(targetFromNotification(n));
   }
 
   if (loading) return <LiquidLoader label="Loading notifications…" />;
@@ -199,10 +293,10 @@ export function NotificationsSection() {
           <p className="font-display text-[18px] font-extrabold tracking-[-0.03em] text-navy">
             {filter === "unread" ? "No unread alerts" : "You’re caught up"}
           </p>
-          <p className="mx-auto mt-1.5 max-w-[34ch] text-[13.5px] leading-relaxed text-muted">
+          <p className="mx-auto mt-1.5 max-w-[38ch] text-[13.5px] leading-relaxed text-muted">
             {filter === "unread"
               ? "Everything here has been reviewed."
-              : "New likes, comments, and collaborations will appear here."}
+              : "Collaborations, mutual posts, shop products, and e-learning updates show up here."}
           </p>
           {filter === "unread" ? (
             <button
@@ -259,9 +353,7 @@ export function NotificationsSection() {
                           type="button"
                           className="min-w-0 text-left"
                           disabled={busy}
-                          onClick={() => {
-                            if (!n.isRead) void onMarkRead(n.id);
-                          }}
+                          onClick={() => void onOpen(n)}
                         >
                           <span className="notif-title">{n.title}</span>
                           {n.message ? (
@@ -350,6 +442,39 @@ function KindIcon({ kind }: { kind: NotifKind }) {
             stroke="currentColor"
             strokeWidth="2"
             strokeLinecap="round"
+          />
+        </svg>
+      );
+    case "post":
+      return (
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path
+            d="M5 7h14M5 12h10M5 17h8"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    case "product":
+      return (
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path
+            d="M4 8h16l-1.2 11.2A2 2 0 0116.8 21H7.2a2 2 0 01-2-1.8L4 8zM9 8V6.5A3 3 0 0112 3.5 3 3 0 0115 6.5V8"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case "learn":
+      return (
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path
+            d="M4 7.5 12 4l8 3.5-8 3.5L4 7.5zM6 10v5.5c0 .8 2.7 2.5 6 2.5s6-1.7 6-2.5V10"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinejoin="round"
           />
         </svg>
       );

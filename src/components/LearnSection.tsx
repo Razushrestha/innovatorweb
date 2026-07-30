@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useMemo, useState } from "react";
+import { recordLearnEnrollment } from "@/lib/activity-notifications";
 import {
   courseCategories,
   courses,
@@ -21,6 +22,14 @@ export function LearnSection() {
   const [active, setActive] = useState<Course | null>(null);
   const [enrolled, setEnrolled] = useState<Record<string, boolean>>({});
   const [openChapter, setOpenChapter] = useState(0);
+
+  function enroll(course: Course) {
+    setEnrolled((prev) => ({ ...prev, [course.id]: true }));
+    recordLearnEnrollment({
+      courseId: course.id,
+      courseName: course.name,
+    });
+  }
 
   const filtered = useMemo(() => {
     return courses.filter((c) => {
@@ -182,9 +191,7 @@ export function LearnSection() {
             label="Enroll now"
             doneLabel="Enrolled"
             className="min-w-[150px]"
-            onEnroll={() =>
-              setEnrolled((prev) => ({ ...prev, [active.id]: true }))
-            }
+            onEnroll={() => enroll(active)}
           />
         </div>
       </div>
@@ -269,9 +276,7 @@ export function LearnSection() {
                   enrolled={!!enrolled[c.id]}
                   label="Enroll"
                   className="!min-h-[32px] !px-2.5 !py-1 text-[11px]"
-                  onEnroll={() =>
-                    setEnrolled((prev) => ({ ...prev, [c.id]: true }))
-                  }
+                  onEnroll={() => enroll(c)}
                 />
               </div>
             </article>
@@ -357,9 +362,7 @@ export function LearnSection() {
                   <WaveEnrollButton
                     enrolled={!!enrolled[c.id]}
                     className="w-full !min-h-[36px] text-[12px]"
-                    onEnroll={() =>
-                      setEnrolled((prev) => ({ ...prev, [c.id]: true }))
-                    }
+                    onEnroll={() => enroll(c)}
                   />
                 </div>
               </article>

@@ -133,6 +133,16 @@ export type ChatPeerRequest = {
   username?: string | null;
 };
 
+export type NotificationSource = "feed" | "shop" | "local";
+
+export type NotificationTargetTab =
+  | "feed"
+  | "chat"
+  | "learn"
+  | "shop"
+  | "profile"
+  | "notifications";
+
 export type AppNotification = {
   id: string;
   title: string;
@@ -141,8 +151,13 @@ export type AppNotification = {
   senderUsername?: string | null;
   senderAvatar?: string | null;
   relatedPostId?: string | null;
+  relatedUserId?: string | null;
+  relatedProductId?: string | null;
+  relatedCourseId?: string | null;
   isRead: boolean;
   createdAt?: string | null;
+  source?: NotificationSource;
+  targetTab?: NotificationTargetTab;
 };
 
 export type ApiEnvelope<T> = {

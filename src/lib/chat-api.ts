@@ -1,7 +1,49 @@
 import { ApiConfig } from "./api-config";
-import { apiRequest } from "./api-client";
+import { ApiException, apiMultipart, apiRequest } from "./api-client";
 import { toProxiedMediaUrlOrNull } from "./media-url";
 import type { ChatConversation, ChatMessage } from "./types";
+
+export type ChatMediaKind = "image" | "video" | "audio" | "pdf" | "file";
+
+export function chatMediaKindFromFile(file: File): ChatMediaKind {
+  const type = (file.type || "").toLowerCase();
+  const name = file.name.toLowerCase();
+  if (type.startsWith("image/") || /\.(png|jpe?g|gif|webp|heic)$/i.test(name)) {
+    return "image";
+  }
+  if (type.startsWith("video/") || /\.(mp4|webm|mov|m4v)$/i.test(name)) {
+    return "video";
+  }
+  if (type.startsWith("audio/") || /\.(mp3|wav|m4a|aac|ogg)$/i.test(name)) {
+    return "audio";
+  }
+  if (type === "application/pdf" || name.endsWith(".pdf")) return "pdf";
+  return "file";
+}
+
+export function chatMediaKindFromMessage(
+  messageType?: string | null,
+  mediaUrl?: string | null,
+  content?: string | null,
+): ChatMediaKind | "text" {
+  const blob = `${messageType ?? ""} ${mediaUrl ?? ""} ${content ?? ""}`.toLowerCase();
+  if (!mediaUrl && (messageType === "text" || !messageType)) return "text";
+  if (/(image|photo|png|jpe?g|gif|webp)/.test(blob)) return "image";
+  if (/(video|mp4|webm|mov)/.test(blob)) return "video";
+  if (/(audio|mp3|wav|m4a|voice)/.test(blob)) return "audio";
+  if (/(pdf|document)/.test(blob)) return "pdf";
+  if (mediaUrl) return "file";
+  return "text";
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("Could not read file"));
+    reader.readAsDataURL(file);
+  });
+}
 
 function asParticipant(raw: Record<string, unknown>) {
   return {
@@ -108,6 +150,79 @@ export async function sendMessage(conversationId: string, content: string) {
     {
       method: "POST",
       body: { content, message_type: "text" },
+    },
+  );
+  return asMessage(data);
+}
+
+/**
+ * Send image / video / audio / PDF (or other file) with optional caption.
+ * Tries multipart upload first, then JSON with media_url (data URL) as fallback.
+ */
+export async function sendMediaMessage(
+  conversationId: string,
+  file: File,
+  caption = "",
+) {
+  const kind = chatMediaKindFromFile(file);
+  const messageType = kind === "file" ? "file" : kind;
+  const content =
+    caption.trim() ||
+    (kind === "image"
+      ? "Photo"
+      : kind === "video"
+        ? "Video"
+        : kind === "audio"
+          ? "Audio"
+          : kind === "pdf"
+            ? file.name || "PDF"
+            : file.name || "Attachment");
+
+  const path = `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages`;
+
+  // 1) Multipart — preferred when the chat service accepts binary media.
+  try {
+    const form = new FormData();
+    form.append("content", content);
+    form.append("message_type", messageType);
+    form.append("media", file, file.name);
+    form.append("file", file, file.name);
+    form.append("media_file", file, file.name);
+    const data = await apiMultipart<Record<string, unknown>>(
+      ApiConfig.chatBaseUrl,
+      path,
+      form,
+    );
+    return asMessage(data);
+  } catch (err) {
+    // Continue to JSON fallback for APIs that only accept media_url.
+    if (err instanceof ApiException && err.status && err.status >= 500) {
+      throw err;
+    }
+  }
+
+  // 2) JSON + media_url (data URL) — works with swagger SendMessageRequest.
+  const maxBytes = 4.5 * 1024 * 1024;
+  if (file.size > maxBytes) {
+    throw new ApiException(
+      "File is too large to send this way (max ~4.5 MB). Try a smaller file.",
+    );
+  }
+  const mediaUrl = await readFileAsDataUrl(file);
+  if (!mediaUrl) {
+    throw new ApiException("Could not prepare the attachment");
+  }
+
+  const data = await apiRequest<Record<string, unknown>>(
+    ApiConfig.chatBaseUrl,
+    path,
+    {
+      method: "POST",
+      body: {
+        content,
+        message_type: messageType,
+        media_url: mediaUrl,
+      },
     },
   );
   return asMessage(data);

@@ -21,7 +21,10 @@ import { ShopSection } from "@/components/ShopSection";
 import { BrandMark } from "@/components/BrandMark";
 import { logout } from "@/lib/auth-api";
 import { AuthSession } from "@/lib/auth-session";
+import { getUnreadNotificationCount } from "@/lib/notifications-api";
+import { sendPresenceHeartbeat } from "@/lib/presence";
 import type { ChatPeerRequest } from "@/lib/types";
+import type { NotificationOpenTarget } from "@/components/NotificationsSection";
 
 export default function AppShellPage() {
   const router = useRouter();
@@ -30,6 +33,7 @@ export default function AppShellPage() {
   const [email, setEmail] = useState<string | null>(null);
   const [feedKey, setFeedKey] = useState(0);
   const [chatPeer, setChatPeer] = useState<ChatPeerRequest | null>(null);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [authorView, setAuthorView] = useState<{
     userId: string;
     name?: string | null;
@@ -41,6 +45,23 @@ export default function AppShellPage() {
     setTab("chat");
   }
 
+  function openNotificationTarget(target: NotificationOpenTarget) {
+    setAuthorView(null);
+    if (target.userId && (target.tab === "profile" || !target.tab)) {
+      setAuthorView({ userId: target.userId });
+      return;
+    }
+    if (target.userId && target.tab === "chat") {
+      startChat({ userId: target.userId });
+      return;
+    }
+    if (target.tab === "feed" || target.tab === "shop" || target.tab === "learn") {
+      setTab(target.tab);
+      return;
+    }
+    if (target.tab) setTab(target.tab as AppTab);
+  }
+
   useEffect(() => {
     if (!AuthSession.isSignedIn()) {
       router.replace("/login");
@@ -50,6 +71,42 @@ export default function AppShellPage() {
     setEmail(session.email);
     setReady(true);
   }, [router]);
+
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    const refresh = () => {
+      void getUnreadNotificationCount().then((n) => {
+        if (!cancelled) setUnreadNotifications(n);
+      });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 60000);
+    const onFocus = () => refresh();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [ready]);
+
+  // Presence heartbeat so chat peers can show a green online dot.
+  useEffect(() => {
+    if (!ready) return;
+    const userId = AuthSession.load().userId;
+    if (!userId) return;
+    void sendPresenceHeartbeat(userId);
+    const beat = window.setInterval(() => {
+      void sendPresenceHeartbeat(userId);
+    }, 25000);
+    const onFocus = () => void sendPresenceHeartbeat(userId);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(beat);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [ready]);
 
   async function onLogout() {
     await logout();
@@ -77,6 +134,7 @@ export default function AppShellPage() {
           }}
           email={email}
           onLogout={() => void onLogout()}
+          unreadNotifications={unreadNotifications}
         />
 
         <div className="app-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -151,7 +209,10 @@ export default function AppShellPage() {
                 />
               ) : null}
               {!authorView && tab === "notifications" ? (
-                <NotificationsSection />
+                <NotificationsSection
+                  onOpenTarget={openNotificationTarget}
+                  onUnreadChange={setUnreadNotifications}
+                />
               ) : null}
             </main>
 

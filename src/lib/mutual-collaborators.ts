@@ -1,10 +1,25 @@
 import { listFollowers, listFollowing } from "./profile-api";
 import type { ProfileListUser } from "./types";
 
+function usernameKey(u: ProfileListUser) {
+  return (u.username ?? "").trim().toLowerCase();
+}
+
+function mergeUser(a: ProfileListUser, b?: ProfileListUser): ProfileListUser {
+  return {
+    id: a.id || b?.id || "",
+    username: a.username || b?.username || null,
+    fullName: a.fullName || b?.fullName || null,
+    avatar: a.avatar || b?.avatar || null,
+    role: a.role || b?.role || null,
+    isFollowed: true,
+  };
+}
+
 /**
- * Mutual collaborators = people who appear in both
- * Collaborators (followers) and Collaborating (following).
- * Matched by auth user id (username used only as display fallback).
+ * Mutual collaborators = same person in both Collaborators (followers)
+ * and Collaborating (following). Match by user id, or by username when
+ * both lists share the same @handle.
  */
 export async function listMutualCollaborators(): Promise<ProfileListUser[]> {
   const [followers, following] = await Promise.all([
@@ -15,33 +30,41 @@ export async function listMutualCollaborators(): Promise<ProfileListUser[]> {
   const followingById = new Map(
     following.filter((u) => u.id).map((u) => [u.id, u]),
   );
+  const followingByUsername = new Map(
+    following
+      .filter((u) => usernameKey(u))
+      .map((u) => [usernameKey(u), u] as const),
+  );
 
-  const seen = new Set<string>();
+  const seenIds = new Set<string>();
+  const seenUsernames = new Set<string>();
   const mutual: ProfileListUser[] = [];
 
   for (const follower of followers) {
-    if (!follower.id || seen.has(follower.id)) continue;
-    const alsoFollowing =
-      followingById.has(follower.id) || follower.isFollowed === true;
-    if (!alsoFollowing) continue;
-    seen.add(follower.id);
-    const fromFollowing = followingById.get(follower.id);
-    mutual.push({
-      ...follower,
-      isFollowed: true,
-      username: follower.username || fromFollowing?.username || null,
-      fullName: follower.fullName || fromFollowing?.fullName || null,
-      avatar: follower.avatar || fromFollowing?.avatar || null,
-    });
+    const uname = usernameKey(follower);
+    const byId = follower.id ? followingById.get(follower.id) : undefined;
+    const byName = uname ? followingByUsername.get(uname) : undefined;
+    const match = byId || byName;
+    if (!match && !follower.isFollowed) continue;
+
+    const merged = mergeUser(follower, match);
+    if (!merged.id) continue;
+    if (seenIds.has(merged.id)) continue;
+    if (uname && seenUsernames.has(uname)) continue;
+
+    seenIds.add(merged.id);
+    if (uname) seenUsernames.add(uname);
+    mutual.push(merged);
   }
 
-  // Include anyone in following who is marked followed-back via isFollowed
-  // on the following list if the followers payload omitted them.
   for (const person of following) {
-    if (!person.id || seen.has(person.id)) continue;
+    if (!person.id || seenIds.has(person.id)) continue;
+    const uname = usernameKey(person);
+    if (uname && seenUsernames.has(uname)) continue;
     if (!person.isFollowed) continue;
-    seen.add(person.id);
-    mutual.push({ ...person, isFollowed: true });
+    seenIds.add(person.id);
+    if (uname) seenUsernames.add(uname);
+    mutual.push(mergeUser(person));
   }
 
   return mutual;

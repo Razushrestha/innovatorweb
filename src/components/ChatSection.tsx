@@ -13,18 +13,22 @@ import {
 import { ApiException } from "@/lib/api-client";
 import { AuthSession } from "@/lib/auth-session";
 import {
+  chatMediaKindFromFile,
+  chatMediaKindFromMessage,
   createConversation,
   deleteConversation,
   listConversations,
   listMessages,
   markRead,
   peerOf,
+  sendMediaMessage,
   sendMessage,
 } from "@/lib/chat-api";
 import {
   isMutualCollaborator,
   listMutualCollaborators,
 } from "@/lib/mutual-collaborators";
+import { fetchOnlineMap, sendPresenceHeartbeat } from "@/lib/presence";
 import type {
   ChatConversation,
   ChatMessage,
@@ -35,7 +39,27 @@ import type {
 import { BrandMark } from "./BrandMark";
 import { LiquidLoader } from "./ui/LiquidChrome";
 
-type LocalMessage = ChatMessage & { pending?: boolean };
+type LocalMessage = ChatMessage & {
+  pending?: boolean;
+  localPreviewUrl?: string | null;
+};
+
+const ATTACH_ACCEPT =
+  "image/*,video/*,audio/*,.pdf,application/pdf";
+
+function previewLabel(m: LocalMessage) {
+  const kind = chatMediaKindFromMessage(
+    m.messageType,
+    m.mediaUrl || m.localPreviewUrl,
+    m.content,
+  );
+  if (kind === "image") return "Photo";
+  if (kind === "video") return "Video";
+  if (kind === "audio") return "Audio";
+  if (kind === "pdf") return m.content?.trim() || "PDF";
+  if (kind === "file") return m.content?.trim() || "Attachment";
+  return m.content || "No messages yet";
+}
 
 function timeLabel(iso?: string | null) {
   if (!iso) return "";
@@ -82,12 +106,15 @@ function peerName(p?: ChatParticipant | null) {
 function PeerAvatar({
   peer,
   size = 44,
+  online = false,
 }: {
   peer?: ChatParticipant | null;
   size?: number;
+  online?: boolean;
 }) {
   const name = peerName(peer);
   const letter = name.slice(0, 1).toUpperCase();
+  const dot = Math.max(9, Math.round(size * 0.22));
   return (
     <span
       className="chat-avatar chat-avatar-ring relative"
@@ -104,6 +131,14 @@ function PeerAvatar({
       ) : (
         letter
       )}
+      {online ? (
+        <span
+          className="chat-online-dot"
+          style={{ width: dot, height: dot }}
+          title="Online"
+          aria-label="Online"
+        />
+      ) : null}
     </span>
   );
 }
@@ -122,6 +157,8 @@ export function ChatSection({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [attachFile, setAttachFile] = useState<File | null>(null);
+  const [attachPreview, setAttachPreview] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [mutualPeers, setMutualPeers] = useState<ProfileListUser[]>([]);
   const [mutualLoading, setMutualLoading] = useState(false);
@@ -130,8 +167,10 @@ export function ChatSection({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [onlineMap, setOnlineMap] = useState<Record<string, boolean>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingKey = pendingPeer?.userId ?? "";
 
   const active = useMemo(
@@ -140,21 +179,136 @@ export function ChatSection({
   );
   const peer = active ? peerOf(active, me) : null;
 
-  const refreshRooms = useCallback(async () => {
+  const peerIds = useMemo(() => {
+    const ids = rooms
+      .map((room) => peerOf(room, me)?.userId)
+      .filter((id): id is string => Boolean(id));
+    if (peer?.userId) ids.push(peer.userId);
+    return Array.from(new Set(ids));
+  }, [rooms, me, peer?.userId]);
+
+  // Keep this user online while Chat is open; poll peers for green dots.
+  useEffect(() => {
+    if (!me) return;
+    void sendPresenceHeartbeat(me);
+    const beat = window.setInterval(() => {
+      void sendPresenceHeartbeat(me);
+    }, 25000);
+    return () => window.clearInterval(beat);
+  }, [me]);
+
+  useEffect(() => {
+    if (peerIds.length === 0) {
+      setOnlineMap({});
+      return;
+    }
+    let cancelled = false;
+    const refresh = () => {
+      void fetchOnlineMap(peerIds).then((map) => {
+        if (!cancelled) setOnlineMap(map);
+      });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [peerIds]);
+
+  /** Ensure every mutual collaborator has a conversation row in Messages. */
+  const syncMutualRooms = useCallback(async () => {
     try {
-      const list = await listConversations();
-      setRooms(list);
+      const [list, mutual] = await Promise.all([
+        listConversations(),
+        listMutualCollaborators(),
+      ]);
+      setMutualPeers(mutual);
+
+      const existingPeerIds = new Set(
+        list
+          .map((room) => peerOf(room, me)?.userId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const existingPeerNames = new Set(
+        list
+          .map((room) =>
+            (peerOf(room, me)?.username ?? "").trim().toLowerCase(),
+          )
+          .filter(Boolean),
+      );
+
+      const missing = mutual.filter((u) => {
+        if (!u.id) return false;
+        if (existingPeerIds.has(u.id)) return false;
+        const uname = (u.username ?? "").trim().toLowerCase();
+        if (uname && existingPeerNames.has(uname)) return false;
+        return true;
+      });
+
+      if (missing.length > 0) {
+        await Promise.allSettled(
+          missing.map((u) =>
+            createConversation({
+              participantUserId: u.id,
+              participantUsername:
+                u.username?.trim() || u.fullName?.trim() || undefined,
+            }),
+          ),
+        );
+      }
+
+      const next = missing.length > 0 ? await listConversations() : list;
+      // Prefer mutual usernames on participants when chat API omits them.
+      const byId = new Map(mutual.map((u) => [u.id, u]));
+      const enriched = next.map((room) => {
+        const p = peerOf(room, me);
+        if (!p?.userId) return room;
+        const m = byId.get(p.userId);
+        if (!m) return room;
+        if (p.username && p.avatar) return room;
+        return {
+          ...room,
+          participants: room.participants.map((part) =>
+            part.userId === p.userId
+              ? {
+                  ...part,
+                  username: part.username || m.username || m.fullName || null,
+                  avatar: part.avatar || m.avatar || null,
+                }
+              : part,
+          ),
+        };
+      });
+
+      // Active threads first, then alphabetical by peer name.
+      enriched.sort((a, b) => {
+        const aMsg = a.lastMessage?.createdAt
+          ? Date.parse(a.lastMessage.createdAt)
+          : 0;
+        const bMsg = b.lastMessage?.createdAt
+          ? Date.parse(b.lastMessage.createdAt)
+          : 0;
+        if (aMsg !== bMsg) return bMsg - aMsg;
+        return peerName(peerOf(a, me)).localeCompare(peerName(peerOf(b, me)));
+      });
+
+      setRooms(enriched);
       setError(null);
     } catch (e) {
       setError(e instanceof ApiException ? e.message : "Could not load chats");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [me]);
+
+  const refreshRooms = useCallback(async () => {
+    await syncMutualRooms();
+  }, [syncMutualRooms]);
 
   useEffect(() => {
-    void refreshRooms();
-  }, [refreshRooms]);
+    void syncMutualRooms();
+  }, [syncMutualRooms]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -284,32 +438,100 @@ export function ChatSection({
     })();
   }, [showNew]);
 
+  function clearAttachment() {
+    if (attachPreview?.startsWith("blob:")) {
+      URL.revokeObjectURL(attachPreview);
+    }
+    setAttachFile(null);
+    setAttachPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function onPickFile(file: File | null) {
+    if (!file) return;
+    const kind = chatMediaKindFromFile(file);
+    const ok =
+      kind === "image" ||
+      kind === "video" ||
+      kind === "audio" ||
+      kind === "pdf";
+    if (!ok) {
+      setError("Only image, video, audio, or PDF files are supported.");
+      return;
+    }
+    if (attachPreview?.startsWith("blob:")) {
+      URL.revokeObjectURL(attachPreview);
+    }
+    setError(null);
+    setAttachFile(file);
+    setAttachPreview(
+      kind === "image" || kind === "video" ? URL.createObjectURL(file) : null,
+    );
+  }
+
   async function onSend(e?: FormEvent) {
     e?.preventDefault();
-    if (!activeId || !draft.trim() || sending) return;
+    if (!activeId || sending) return;
     const text = draft.trim();
+    const file = attachFile;
+    if (!text && !file) return;
+
     const tempId = `tmp-${Date.now()}`;
+    const kind = file ? chatMediaKindFromFile(file) : "text";
     const optimistic: LocalMessage = {
       id: tempId,
       conversationId: activeId,
       senderId: me || "",
-      content: text,
+      content:
+        text ||
+        (file
+          ? kind === "image"
+            ? "Photo"
+            : kind === "video"
+              ? "Video"
+              : kind === "audio"
+                ? "Audio"
+                : file.name
+          : ""),
+      messageType: file ? kind : "text",
+      mediaUrl: null,
+      localPreviewUrl: attachPreview,
       createdAt: new Date().toISOString(),
       pending: true,
     };
     setDraft("");
+    clearAttachment();
     setMessages((prev) => [...prev, optimistic]);
     setSending(true);
     window.setTimeout(resizeComposer, 0);
     try {
-      const msg = await sendMessage(activeId, text);
+      const msg = file
+        ? await sendMediaMessage(activeId, file, text)
+        : await sendMessage(activeId, text);
       setMessages((prev) =>
-        prev.map((m) => (m.id === tempId ? { ...msg, pending: false } : m)),
+        prev.map((m) =>
+          m.id === tempId
+            ? {
+                ...msg,
+                pending: false,
+                localPreviewUrl: m.localPreviewUrl,
+              }
+            : m,
+        ),
       );
       void refreshRooms();
-    } catch {
+    } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setDraft(text);
+      if (file) {
+        setAttachFile(file);
+        setAttachPreview(optimistic.localPreviewUrl ?? null);
+      }
+      setError(
+        err instanceof ApiException
+          ? err.message
+          : "Could not send attachment",
+      );
     } finally {
       setSending(false);
       composerRef.current?.focus();
@@ -362,6 +584,9 @@ export function ChatSection({
                 </p>
                 <p className="text-[12px] text-muted">
                   {rooms.length} conversation{rooms.length === 1 ? "" : "s"}
+                  {mutualPeers.length > 0
+                    ? ` · ${mutualPeers.length} mutual`
+                    : ""}
                 </p>
               </div>
               <button
@@ -398,20 +623,11 @@ export function ChatSection({
                 <p className="font-display text-[15px] font-bold text-navy">
                   {query ? "No matches" : "No conversations yet"}
                 </p>
-                <p className="mx-auto mt-1 max-w-[26ch] text-[12.5px] text-muted">
+                <p className="mx-auto mt-1 max-w-[28ch] text-[12.5px] text-muted">
                   {query
                     ? "Try another name."
-                    : "Chat with people who are mutual collaborators."}
+                    : "Mutual collaborators appear here automatically once you follow each other."}
                 </p>
-                {!query ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowNew(true)}
-                    className="liquid-btn liquid-btn-dark mx-auto mt-4 !min-h-0 px-4 py-2.5 text-[13px]"
-                  >
-                    New chat
-                  </button>
-                ) : null}
               </li>
             ) : (
               filtered.map((room) => {
@@ -427,7 +643,11 @@ export function ChatSection({
                         selected ? "chat-tile-active" : ""
                       }`}
                     >
-                      <PeerAvatar peer={p} size={46} />
+                      <PeerAvatar
+                        peer={p}
+                        size={46}
+                        online={Boolean(p?.userId && onlineMap[p.userId])}
+                      />
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center justify-between gap-2">
                           <span
@@ -456,7 +676,9 @@ export function ChatSection({
                                 : "text-muted"
                           }`}
                         >
-                          {room.lastMessage?.content || "No messages yet"}
+                          {room.lastMessage
+                            ? previewLabel(room.lastMessage)
+                            : "No messages yet"}
                         </span>
                       </span>
                       {unread ? (
@@ -504,12 +726,20 @@ export function ChatSection({
                 >
                   <IconBack />
                 </button>
-                <PeerAvatar peer={peer} size={40} />
+                <PeerAvatar
+                  peer={peer}
+                  size={40}
+                  online={Boolean(peer?.userId && onlineMap[peer.userId])}
+                />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-display text-[16px] font-bold tracking-[-0.02em] text-navy">
                     {peerName(peer)}
                   </p>
-                  <p className="text-[11.5px] text-muted">Direct message</p>
+                  <p className="text-[11.5px] text-muted">
+                    {peer?.userId && onlineMap[peer.userId]
+                      ? "Online"
+                      : "Direct message"}
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -527,7 +757,11 @@ export function ChatSection({
                   </div>
                 ) : messages.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-                    <PeerAvatar peer={peer} size={68} />
+                    <PeerAvatar
+                      peer={peer}
+                      size={68}
+                      online={Boolean(peer?.userId && onlineMap[peer.userId])}
+                    />
                     <p className="mt-3.5 font-display text-[18px] font-bold text-navy">
                       {peerName(peer)}
                     </p>
@@ -563,7 +797,7 @@ export function ChatSection({
                                 m.pending ? "chat-bubble-pending" : ""
                               }`}
                             >
-                              <p className="whitespace-pre-wrap">{m.content}</p>
+                              <ChatMediaBody message={m} mine={mine} />
                               <div
                                 className={`mt-1 text-right text-[10.5px] ${
                                   mine ? "text-white/45" : "text-muted"
@@ -582,10 +816,57 @@ export function ChatSection({
               </div>
 
               <div className="chat-composer-wrap">
+                {attachFile ? (
+                  <div className="chat-attach-preview">
+                    <span className="chat-attach-preview-thumb">
+                      {attachPreview &&
+                      chatMediaKindFromFile(attachFile) === "image" ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={attachPreview} alt="" />
+                      ) : attachPreview &&
+                        chatMediaKindFromFile(attachFile) === "video" ? (
+                        <video src={attachPreview} muted />
+                      ) : (
+                        <span className="text-[11px] font-bold uppercase tracking-[0.08em]">
+                          {chatMediaKindFromFile(attachFile)}
+                        </span>
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-navy">
+                      {attachFile.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={clearAttachment}
+                      className="liquid-chip !py-1 !text-[11px]"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : null}
                 <form
                   onSubmit={(e) => void onSend(e)}
                   className="chat-composer"
                 >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept={ATTACH_ACCEPT}
+                    className="hidden"
+                    onChange={(e) =>
+                      onPickFile(e.target.files?.[0] ?? null)
+                    }
+                  />
+                  <button
+                    type="button"
+                    disabled={sending}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="chat-attach liquid-press"
+                    aria-label="Attach image, video, audio, or PDF"
+                    title="Attach image, video, audio, or PDF"
+                  >
+                    <IconAttach />
+                  </button>
                   <textarea
                     ref={composerRef}
                     value={draft}
@@ -600,14 +881,16 @@ export function ChatSection({
                   />
                   <button
                     type="submit"
-                    disabled={!draft.trim() || sending}
+                    disabled={(!draft.trim() && !attachFile) || sending}
                     className="chat-send liquid-press"
                     aria-label="Send"
                   >
                     <IconSend />
                   </button>
                 </form>
-                <p className="chat-hint">Enter to send · Shift+Enter for new line</p>
+                <p className="chat-hint">
+                  Attach photo, video, audio, or PDF · Enter to send
+                </p>
               </div>
             </>
           )}
@@ -706,6 +989,93 @@ export function ChatSection({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ChatMediaBody({
+  message,
+  mine,
+}: {
+  message: LocalMessage;
+  mine: boolean;
+}) {
+  const src = message.mediaUrl || message.localPreviewUrl || "";
+  const kind = chatMediaKindFromMessage(
+    message.messageType,
+    src,
+    message.content,
+  );
+  const caption = message.content?.trim() || "";
+  const showCaption =
+    caption &&
+    !["photo", "video", "audio", "pdf", "attachment"].includes(
+      caption.toLowerCase(),
+    );
+
+  return (
+    <div className="space-y-1.5">
+      {kind === "image" && src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="" className="chat-media-image" />
+      ) : null}
+      {kind === "video" && src ? (
+        <video src={src} controls playsInline className="chat-media-video" />
+      ) : null}
+      {kind === "audio" && src ? (
+        <audio src={src} controls className="chat-media-audio" />
+      ) : null}
+      {kind === "pdf" || (kind === "file" && src) ? (
+        <a
+          href={src || undefined}
+          target="_blank"
+          rel="noreferrer"
+          className={`chat-media-file ${mine ? "mine" : ""}`}
+        >
+          <IconFile />
+          <span className="min-w-0 truncate">
+            {caption || (kind === "pdf" ? "PDF document" : "Attachment")}
+          </span>
+        </a>
+      ) : null}
+      {(kind === "text" || showCaption) && caption ? (
+        <p className="whitespace-pre-wrap">{caption}</p>
+      ) : null}
+      {kind !== "text" && !src && caption ? (
+        <p className="whitespace-pre-wrap">{caption}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function IconAttach() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M9.5 16.5V8.2a2.7 2.7 0 015.4 0v9.1a4.2 4.2 0 01-8.4 0V8.8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function IconFile() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M7 3.5h7l4 4V20a1.5 1.5 0 01-1.5 1.5h-9.5A1.5 1.5 0 015.5 20V5A1.5 1.5 0 017 3.5z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M14 3.5V8h4.5"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
