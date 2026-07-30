@@ -6,10 +6,7 @@ import { ApiException } from "@/lib/api-client";
 import { getPostsByAuthor } from "@/lib/feed-api";
 import { AuthSession } from "@/lib/auth-session";
 import { syncActivityNotifications } from "@/lib/activity-notifications";
-import {
-  isMutualCollaborator,
-  listMutualCollaborators,
-} from "@/lib/mutual-collaborators";
+import { listMutualCollaborators } from "@/lib/mutual-collaborators";
 import {
   blockUser,
   listFollowers,
@@ -57,7 +54,6 @@ export function ProfileView({
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [canChat, setCanChat] = useState(false);
   const [peopleKind, setPeopleKind] = useState<
     "followers" | "following" | null
   >(null);
@@ -115,30 +111,6 @@ export function ProfileView({
       }
     })();
   }, [local.authUserId, local.id]);
-
-  useEffect(() => {
-    if (isOwn) {
-      setCanChat(false);
-      return;
-    }
-    const target = local.authUserId || local.id;
-    if (!target) {
-      setCanChat(false);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const ok = await isMutualCollaborator(target);
-        if (!cancelled) setCanChat(ok);
-      } catch {
-        if (!cancelled) setCanChat(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isOwn, local.authUserId, local.id, local.isFollowed]);
 
   function cycleTitle() {
     if (!isOwn) return;
@@ -401,19 +373,20 @@ export function ProfileView({
               >
                 {busy ? "…" : local.isFollowed ? "Collaborating" : "Collaborate"}
               </button>
-              {canChat && onStartChat ? (
+              {onStartChat ? (
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() =>
+                  onClick={() => {
+                    setError(null);
                     onStartChat({
                       userId: local.authUserId || local.id,
                       username: local.username || local.fullName || displayName,
-                    })
-                  }
+                    });
+                  }}
                   className="profile-chat liquid-press"
                 >
-                  Chat
+                  Message
                 </button>
               ) : null}
               <button
@@ -875,7 +848,7 @@ function PeopleSheet({
                           }}
                           className="profile-chat liquid-press !min-w-0 !px-3 !py-1.5 !text-[12px]"
                         >
-                          Chat
+                          Message
                         </button>
                       ) : null}
                       <button

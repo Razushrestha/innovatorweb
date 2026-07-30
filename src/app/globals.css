@@ -333,8 +333,15 @@ body::-webkit-scrollbar,
     background: var(--gold);
   }
 
-  .notif-item.unread .notif-avatar {
+  .notif-item.unread .notif-avatar-wrap {
     margin-left: 0.55rem;
+  }
+
+  .notif-avatar-wrap {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
   }
 
   .notif-avatar {
@@ -347,7 +354,6 @@ body::-webkit-scrollbar,
     background: var(--navy);
     color: #fff;
     overflow: hidden;
-    flex-shrink: 0;
   }
 
   .notif-avatar img {
@@ -358,16 +364,59 @@ body::-webkit-scrollbar,
 
   .notif-type-badge {
     position: absolute;
-    right: -2px;
-    bottom: -2px;
+    right: -3px;
+    bottom: -3px;
     display: grid;
     place-items: center;
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
     border-radius: 999px;
-    background: var(--navy);
-    color: var(--gold);
-    border: 2px solid var(--canvas);
+    background: #0b1a2c;
+    color: #f4b400;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(7, 19, 35, 0.18);
+    z-index: 2;
+  }
+
+  .notif-type-badge.product {
+    background: #0b1a2c;
+    color: #f4b400;
+  }
+
+  .notif-type-badge.learn {
+    background: #0b1a2c;
+    color: #7dd3fc;
+  }
+
+  .notif-type-badge.collaborate {
+    background: #0b1a2c;
+    color: #86efac;
+  }
+
+  .notif-type-badge.post {
+    background: #0b1a2c;
+    color: #fde68a;
+  }
+
+  .notif-type-badge.like {
+    background: #0b1a2c;
+    color: #fda4af;
+  }
+
+  .notif-type-badge.comment,
+  .notif-type-badge.mention {
+    background: #0b1a2c;
+    color: #c4b5fd;
+  }
+
+  .notif-action-link {
+    margin-top: 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #3b82f6;
   }
 
   .notif-title {
@@ -1016,6 +1065,7 @@ body::-webkit-scrollbar,
 
   .profile-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
@@ -1023,9 +1073,9 @@ body::-webkit-scrollbar,
   }
 
   .profile-follow {
-    min-width: 118px;
+    min-width: 110px;
     border-radius: 999px;
-    padding: 0.55rem 1.1rem;
+    padding: 0.55rem 1.05rem;
     font-size: 13px;
     font-weight: 750;
     color: #fff;
@@ -1042,7 +1092,7 @@ body::-webkit-scrollbar,
   }
 
   .profile-chat {
-    min-width: 72px;
+    min-width: 88px;
     border-radius: 999px;
     padding: 0.55rem 1rem;
     font-size: 13px;
@@ -1307,19 +1357,26 @@ body::-webkit-scrollbar,
     opacity: 0.7;
   }
 
-  .chat-online-dot {
+  .chat-status-dot {
     position: absolute;
     right: -1px;
     bottom: -1px;
     border-radius: 999px;
-    background: #22c55e;
     border: 2px solid #fff;
     box-shadow: 0 0 0 1px rgba(7, 19, 35, 0.16);
     z-index: 3;
     pointer-events: none;
   }
 
-  .chat-tile-active .chat-online-dot {
+  .chat-status-dot.online {
+    background: #22c55e;
+  }
+
+  .chat-status-dot.offline {
+    background: #ef4444;
+  }
+
+  .chat-tile-active .chat-status-dot {
     border-color: #0b1a2c;
   }
 
@@ -1415,6 +1472,16 @@ body::-webkit-scrollbar,
     object-fit: cover;
   }
 
+  .chat-media-image-btn {
+    display: block;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: zoom-in;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
   .chat-media-image,
   .chat-media-video {
     display: block;
@@ -1423,6 +1490,54 @@ body::-webkit-scrollbar,
     border-radius: 14px;
     object-fit: cover;
     background: rgba(7, 19, 35, 0.06);
+  }
+
+  .chat-media-image-btn:hover .chat-media-image {
+    filter: brightness(0.96);
+  }
+
+  .chat-image-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    background: rgba(7, 19, 35, 0.9);
+    backdrop-filter: blur(8px);
+    cursor: zoom-out;
+  }
+
+  .chat-image-lightbox-img {
+    max-width: min(96vw, 960px);
+    max-height: 88vh;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    cursor: default;
+    background: #0b1220;
+  }
+
+  .chat-image-lightbox-close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    z-index: 2;
+    border: none;
+    border-radius: 999px;
+    padding: 0.5rem 1rem;
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.14);
+    cursor: pointer;
+  }
+
+  .chat-image-lightbox-close:hover {
+    background: rgba(255, 255, 255, 0.22);
   }
 
   .chat-media-audio {

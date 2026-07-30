@@ -96,9 +96,28 @@ function kindLabel(kind: NotifKind) {
     case "product":
       return "Shop";
     case "learn":
-      return "Learn";
+      return "E-learning";
     default:
       return "Update";
+  }
+}
+
+function kindActionLabel(kind: NotifKind) {
+  switch (kind) {
+    case "product":
+      return "Shop";
+    case "learn":
+      return "E-learning";
+    case "collaborate":
+      return "Profile";
+    case "post":
+      return "Feed";
+    case "like":
+    case "comment":
+    case "mention":
+      return "View";
+    default:
+      return null;
   }
 }
 
@@ -208,27 +227,33 @@ export function NotificationsSection({
 
   async function onMarkRead(id: string) {
     setBusyId(id);
+    // Optimistic UI first so the row clears even if a backend call lags.
+    setItems((prev) => {
+      const next = prev.map((x) => (x.id === id ? { ...x, isRead: true } : x));
+      onUnreadChange?.(next.filter((n) => !n.isRead).length);
+      return next;
+    });
     try {
       await markNotificationRead(id);
-      setItems((prev) => {
-        const next = prev.map((x) =>
-          x.id === id ? { ...x, isRead: true } : x,
-        );
-        onUnreadChange?.(next.filter((n) => !n.isRead).length);
-        return next;
-      });
+    } catch {
+      /* local override still keeps it read on next load */
     } finally {
       setBusyId(null);
     }
   }
 
   async function onMarkAll() {
-    if (unread === 0) return;
+    if (unread === 0 || markingAll) return;
     setMarkingAll(true);
+    const snapshot = items;
+    // Optimistic: clear unread immediately so the button feels instant.
+    setItems((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    onUnreadChange?.(0);
+    if (filter === "unread") setFilter("all");
     try {
-      await markAllNotificationsRead();
-      setItems((prev) => prev.map((n) => ({ ...n, isRead: true })));
-      onUnreadChange?.(0);
+      await markAllNotificationsRead(snapshot);
+    } catch {
+      /* overrides + local store still keep everything read */
     } finally {
       setMarkingAll(false);
     }
@@ -277,8 +302,12 @@ export function NotificationsSection({
         <button
           type="button"
           disabled={unread === 0 || markingAll}
-          onClick={() => void onMarkAll()}
-          className="text-[12.5px] font-semibold text-navy/50 transition hover:text-navy disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            void onMarkAll();
+          }}
+          className="rounded-full px-3 py-1.5 text-[12.5px] font-semibold text-navy/70 transition hover:bg-white hover:text-navy disabled:cursor-not-allowed disabled:opacity-40"
         >
           {markingAll ? "Updating…" : "Mark all read"}
         </button>
@@ -325,26 +354,33 @@ export function NotificationsSection({
                   ).toUpperCase();
                   const busy = busyId === n.id;
 
+                  const action = kindActionLabel(kind);
                   return (
                     <li key={n.id}>
                       <article
                         className={`notif-item ${n.isRead ? "" : "unread"}`}
                       >
-                        <div className="notif-avatar" aria-hidden>
-                          {n.senderAvatar ? (
-                            <Image
-                              src={n.senderAvatar}
-                              alt=""
-                              width={44}
-                              height={44}
-                              unoptimized
-                            />
-                          ) : (
-                            <span className="font-display text-[16px] font-bold">
-                              {letter}
-                            </span>
-                          )}
-                          <span className="notif-type-badge">
+                        <div className="notif-avatar-wrap" aria-hidden>
+                          <div className="notif-avatar">
+                            {n.senderAvatar ? (
+                              <Image
+                                src={n.senderAvatar}
+                                alt=""
+                                width={44}
+                                height={44}
+                                unoptimized
+                              />
+                            ) : kind === "product" ? (
+                              <KindIcon kind="product" size={20} />
+                            ) : kind === "learn" ? (
+                              <KindIcon kind="learn" size={20} />
+                            ) : (
+                              <span className="font-display text-[16px] font-bold">
+                                {letter}
+                              </span>
+                            )}
+                          </div>
+                          <span className={`notif-type-badge ${kind}`}>
                             <KindIcon kind={kind} />
                           </span>
                         </div>
@@ -359,6 +395,12 @@ export function NotificationsSection({
                           {n.message ? (
                             <span className="notif-message line-clamp-2 block">
                               {n.message}
+                            </span>
+                          ) : null}
+                          {action ? (
+                            <span className="notif-action-link">
+                              <KindIcon kind={kind} size={12} />
+                              {action}
                             </span>
                           ) : null}
                           <span className="notif-meta">
@@ -414,90 +456,149 @@ export function NotificationsSection({
   );
 }
 
-function KindIcon({ kind }: { kind: NotifKind }) {
+function KindIcon({
+  kind,
+  size = 11,
+}: {
+  kind: NotifKind;
+  size?: number;
+}) {
+  const props = {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none" as const,
+    "aria-hidden": true as const,
+  };
+
   switch (kind) {
     case "like":
       return (
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-          <path d="M12 21s-7-4.35-9.5-8.2C.5 9.4 2.2 5.8 5.6 5.2c1.9-.3 3.7.6 4.7 2.1 1-1.5 2.8-2.4 4.7-2.1 3.4.6 5.1 4.2 3.1 7.6C19 16.65 12 21 12 21z" />
+        <svg {...props}>
+          <path
+            d="M12 20.5s-6.8-4.1-9.2-7.8C.6 9.4 2.2 5.8 5.6 5.3c1.8-.3 3.5.6 4.5 2 1-1.4 2.7-2.3 4.5-2 3.4.5 5 4.1 2.8 7.4C18.8 16.4 12 20.5 12 20.5z"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinejoin="round"
+          />
         </svg>
       );
     case "comment":
       return (
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <svg {...props}>
           <path
-            d="M5 6.5A2.5 2.5 0 017.5 4h9A2.5 2.5 0 0119 6.5v7A2.5 2.5 0 0116.5 16H10l-4 3v-3.2A2.5 2.5 0 015 13.5v-7z"
+            d="M5 7a2.5 2.5 0 012.5-2.5h9A2.5 2.5 0 0119 7v6.5A2.5 2.5 0 0116.5 16H10l-4.5 3v-3H7.5A2.5 2.5 0 015 13.5V7z"
             stroke="currentColor"
-            strokeWidth="2"
+            strokeWidth="1.8"
+            strokeLinejoin="round"
           />
         </svg>
       );
     case "collaborate":
       return (
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
-          <circle cx="9" cy="9" r="3" stroke="currentColor" strokeWidth="2" />
-          <circle cx="16" cy="10.5" r="2.5" stroke="currentColor" strokeWidth="2" />
+        <svg {...props}>
+          <circle cx="9" cy="8.5" r="2.8" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="16.2" cy="9.5" r="2.3" stroke="currentColor" strokeWidth="1.8" />
           <path
-            d="M4.5 18c.7-2.4 2.5-3.5 4.5-3.5s3.8 1.1 4.5 3.5"
+            d="M4.2 18c.6-2.5 2.5-3.8 4.8-3.8 1.5 0 2.8.5 3.7 1.4"
             stroke="currentColor"
-            strokeWidth="2"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+          />
+          <path
+            d="M14.2 18c.4-1.5 1.6-2.5 3.4-2.5 1.3 0 2.3.5 2.9 1.3"
+            stroke="currentColor"
+            strokeWidth="1.8"
             strokeLinecap="round"
           />
         </svg>
       );
     case "post":
       return (
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <svg {...props}>
           <path
-            d="M5 7h14M5 12h10M5 17h8"
+            d="M7 4.5h7.2L19 9.3V19a1.5 1.5 0 01-1.5 1.5h-10A1.5 1.5 0 016 19V6A1.5 1.5 0 017.5 4.5H7z"
             stroke="currentColor"
-            strokeWidth="2"
+            strokeWidth="1.8"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M14 4.5V9h4.8M9 13h6M9 16.5h4"
+            stroke="currentColor"
+            strokeWidth="1.8"
             strokeLinecap="round"
+            strokeLinejoin="round"
           />
         </svg>
       );
     case "product":
+      // Professional shopping-bag icon (matches shop product alerts).
       return (
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <svg {...props}>
           <path
-            d="M4 8h16l-1.2 11.2A2 2 0 0116.8 21H7.2a2 2 0 01-2-1.8L4 8zM9 8V6.5A3 3 0 0112 3.5 3 3 0 0115 6.5V8"
+            d="M6.2 8.2h11.6l-.9 10.4a1.8 1.8 0 01-1.8 1.6H8.9a1.8 1.8 0 01-1.8-1.6L6.2 8.2z"
             stroke="currentColor"
-            strokeWidth="2"
+            strokeWidth="1.8"
             strokeLinejoin="round"
+          />
+          <path
+            d="M9 8.2V6.6A3 3 0 0112 3.6a3 3 0 013 3v1.6"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
           />
         </svg>
       );
     case "learn":
       return (
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <svg {...props}>
           <path
-            d="M4 7.5 12 4l8 3.5-8 3.5L4 7.5zM6 10v5.5c0 .8 2.7 2.5 6 2.5s6-1.7 6-2.5V10"
+            d="M3.8 8.2 12 4.5l8.2 3.7L12 11.9 3.8 8.2z"
             stroke="currentColor"
-            strokeWidth="2"
+            strokeWidth="1.8"
             strokeLinejoin="round"
+          />
+          <path
+            d="M6.5 10.2v5.2c0 1.2 2.5 2.6 5.5 2.6s5.5-1.4 5.5-2.6v-5.2"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M20.2 8.5v6.2"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
           />
         </svg>
       );
     case "mention":
       return (
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
-          <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="2" />
-          <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" />
+        <svg {...props}>
+          <circle cx="12" cy="12" r="7.2" stroke="currentColor" strokeWidth="1.8" />
+          <circle cx="12" cy="12" r="2.8" stroke="currentColor" strokeWidth="1.8" />
           <path
-            d="M15 12v1.4a2.1 2.1 0 004.2 0V12"
+            d="M14.8 12v1.3a2 2 0 003.9 0V12"
             stroke="currentColor"
-            strokeWidth="2"
+            strokeWidth="1.8"
             strokeLinecap="round"
           />
         </svg>
       );
     default:
       return (
-        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" aria-hidden>
+        <svg {...props}>
           <path
-            d="M12 4v2M12 18v2M4 12H6M18 12h2M6.8 6.8l1.4 1.4M15.8 15.8l1.4 1.4M6.8 17.2l1.4-1.4M15.8 8.2l1.4-1.4"
+            d="M12 6.5a3.2 3.2 0 00-3.2 3.2c0 2.4 3.2 5.3 3.2 5.3s3.2-2.9 3.2-5.3A3.2 3.2 0 0012 6.5z"
             stroke="currentColor"
-            strokeWidth="2"
+            strokeWidth="1.8"
+            strokeLinejoin="round"
+          />
+          <circle cx="12" cy="9.6" r="1.1" fill="currentColor" />
+          <path
+            d="M8 18.5h8"
+            stroke="currentColor"
+            strokeWidth="1.8"
             strokeLinecap="round"
           />
         </svg>
@@ -521,13 +622,30 @@ function IconCheck() {
 
 function IconTrash() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
       <path
-        d="M5 7h14M9 7V5.5A1.5 1.5 0 0110.5 4h3A1.5 1.5 0 0115 5.5V7m-7 0l.7 12.2A1.5 1.5 0 0010.2 20.5h3.6a1.5 1.5 0 001.5-1.3L16 7"
+        d="M4.5 7h15"
         stroke="currentColor"
-        strokeWidth="1.8"
+        strokeWidth="1.7"
         strokeLinecap="round"
+      />
+      <path
+        d="M9.2 7V5.4A1.4 1.4 0 0110.6 4h2.8a1.4 1.4 0 011.4 1.4V7"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+      <path
+        d="M8.2 7l.55 12.1A1.5 1.5 0 0010.25 20.5h3.5a1.5 1.5 0 001.5-1.4L15.8 7"
+        stroke="currentColor"
+        strokeWidth="1.7"
         strokeLinejoin="round"
+      />
+      <path
+        d="M10.5 11v5.5M13.5 11v5.5"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
       />
     </svg>
   );

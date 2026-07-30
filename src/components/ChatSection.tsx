@@ -142,14 +142,12 @@ function PeerAvatar({
           letter
         )}
       </span>
-      {online ? (
-        <span
-          className="chat-online-dot"
-          style={{ width: dot, height: dot }}
-          title="Online"
-          aria-label="Online"
-        />
-      ) : null}
+      <span
+        className={`chat-status-dot ${online ? "online" : "offline"}`}
+        style={{ width: dot, height: dot }}
+        title={online ? "Online" : "Offline"}
+        aria-label={online ? "Online" : "Offline"}
+      />
     </span>
   );
 }
@@ -180,6 +178,7 @@ export function ChatSection({
   const [query, setQuery] = useState("");
   const [onlineMap, setOnlineMap] = useState<Record<string, boolean>>({});
   const [localUnread, setLocalUnread] = useState<Record<string, number>>({});
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -432,16 +431,15 @@ export function ChatSection({
     setBusy(true);
     setError(null);
     try {
-      const mutual = await isMutualCollaborator(userId);
-      if (!mutual) {
-        setError("Chat is only available with mutual collaborators.");
-        return;
-      }
-
       let list = await listConversations();
       setRooms(list);
       let room = list.find((r) => peerOf(r, me)?.userId === userId) ?? null;
       if (!room) {
+        const mutual = await isMutualCollaborator(userId);
+        if (!mutual) {
+          setError("Chat is only available with mutual collaborators.");
+          return;
+        }
         room = await createConversation({
           participantUserId: userId,
           participantUsername: username?.trim() || undefined,
@@ -853,7 +851,11 @@ export function ChatSection({
                                 m.pending ? "chat-bubble-pending" : ""
                               }`}
                             >
-                              <ChatMediaBody message={m} mine={mine} />
+                              <ChatMediaBody
+                                message={m}
+                                mine={mine}
+                                onOpenImage={(url) => setLightboxSrc(url)}
+                              />
                               <div
                                 className={`mt-1 text-right text-[10.5px] ${
                                   mine ? "text-white/45" : "text-muted"
@@ -953,6 +955,13 @@ export function ChatSection({
         </div>
       </div>
 
+      {lightboxSrc ? (
+        <ChatImageLightbox
+          src={lightboxSrc}
+          onClose={() => setLightboxSrc(null)}
+        />
+      ) : null}
+
       {showNew ? (
         <div
           className="profile-sheet"
@@ -1048,12 +1057,61 @@ export function ChatSection({
   );
 }
 
+function ChatImageLightbox({
+  src,
+  onClose,
+}: {
+  src: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="chat-image-lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Image preview"
+      onClick={onClose}
+    >
+      <button
+        type="button"
+        className="chat-image-lightbox-close"
+        onClick={onClose}
+        aria-label="Close"
+      >
+        Close
+      </button>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt=""
+        className="chat-image-lightbox-img"
+        onClick={(e) => e.stopPropagation()}
+      />
+    </div>
+  );
+}
+
 function ChatMediaBody({
   message,
   mine,
+  onOpenImage,
 }: {
   message: LocalMessage;
   mine: boolean;
+  onOpenImage?: (url: string) => void;
 }) {
   const src = message.mediaUrl || message.localPreviewUrl || "";
   const kind = chatMediaKindFromMessage(
@@ -1071,8 +1129,15 @@ function ChatMediaBody({
   return (
     <div className="space-y-1.5">
       {kind === "image" && src ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt="" className="chat-media-image" />
+        <button
+          type="button"
+          className="chat-media-image-btn"
+          onClick={() => onOpenImage?.(src)}
+          aria-label="View full screen image"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={src} alt="" className="chat-media-image" />
+        </button>
       ) : null}
       {kind === "video" && src ? (
         <video src={src} controls playsInline className="chat-media-video" />

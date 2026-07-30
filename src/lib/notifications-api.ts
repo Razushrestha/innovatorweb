@@ -8,24 +8,51 @@ import {
 import { ApiConfig } from "./api-config";
 import { apiRequest } from "./api-client";
 import { toProxiedMediaUrlOrNull } from "./media-url";
+import {
+  applyNotificationReadOverrides,
+  rememberAllNotificationsRead,
+  rememberNotificationsRead,
+} from "./notification-read-state";
 import type { AppNotification, NotificationSource } from "./types";
 
 function asNotification(
   raw: Record<string, unknown>,
   source: NotificationSource,
 ): AppNotification {
-  const type = (raw.type as string | null) ??
+  const type =
+    (raw.type as string | null) ??
     (raw.notification_type as string | null) ??
     (raw.notificationType as string | null) ??
     null;
+
+  const id = String(
+    raw.id ??
+      raw.notification_id ??
+      raw.notificationId ??
+      raw.NotificationId ??
+      "",
+  );
+
+  const readFlag =
+    raw.is_read === true ||
+    raw.read === true ||
+    raw.isRead === true ||
+    raw.IsRead === true ||
+    String(raw.status ?? "").toLowerCase() === "read";
+
   return {
-    id: `${source}:${String(raw.id ?? "")}`,
-    title: String(raw.title ?? "Notification"),
-    message: String(raw.message ?? raw.body ?? ""),
+    id: `${source}:${id}`,
+    title: String(raw.title ?? raw.Title ?? "Notification"),
+    message: String(raw.message ?? raw.body ?? raw.Message ?? ""),
     type,
-    senderUsername: (raw.sender_username as string | null) ?? null,
+    senderUsername:
+      (raw.sender_username as string | null) ??
+      (raw.senderUsername as string | null) ??
+      null,
     senderAvatar: toProxiedMediaUrlOrNull(
-      (raw.sender_avatar as string | null) ?? null,
+      (raw.sender_avatar as string | null) ??
+        (raw.senderAvatar as string | null) ??
+        null,
       "profile",
     ),
     relatedPostId:
@@ -40,14 +67,13 @@ function asNotification(
     relatedProductId:
       (raw.related_product_id as string | null) ??
       (raw.product_id as string | null) ??
+      (raw.productId as string | null) ??
       null,
-    isRead:
-      raw.is_read === true ||
-      raw.read === true ||
-      raw.isRead === true,
+    isRead: readFlag,
     createdAt:
       (raw.created_at as string | null) ??
       (raw.createdAt as string | null) ??
+      (raw.CreatedAt as string | null) ??
       null,
     source,
     targetTab:
@@ -76,15 +102,32 @@ function splitId(id: string): { source: NotificationSource; rawId: string } {
   return { source: "feed", rawId: id };
 }
 
+function unwrapList(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) {
+    return data.filter(
+      (n): n is Record<string, unknown> => !!n && typeof n === "object",
+    );
+  }
+  if (data && typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+    for (const key of ["items", "results", "notifications", "data"]) {
+      const nested = obj[key];
+      if (Array.isArray(nested)) {
+        return nested.filter(
+          (n): n is Record<string, unknown> => !!n && typeof n === "object",
+        );
+      }
+    }
+  }
+  return [];
+}
+
 async function listFeedNotifications() {
   const data = await apiRequest<unknown>(
     ApiConfig.feedBaseUrl,
     "/api/notifications",
   );
-  if (!Array.isArray(data)) return [] as AppNotification[];
-  return data
-    .filter((n): n is Record<string, unknown> => !!n && typeof n === "object")
-    .map((n) => asNotification(n, "feed"));
+  return unwrapList(data).map((n) => asNotification(n, "feed"));
 }
 
 async function listShopNotifications() {
@@ -92,10 +135,7 @@ async function listShopNotifications() {
     ApiConfig.shopBaseUrl,
     "/api/notifications",
   );
-  if (!Array.isArray(data)) return [] as AppNotification[];
-  return data
-    .filter((n): n is Record<string, unknown> => !!n && typeof n === "object")
-    .map((n) => asNotification(n, "shop"));
+  return unwrapList(data).map((n) => asNotification(n, "shop"));
 }
 
 function sortByDate(items: AppNotification[]) {
@@ -117,7 +157,9 @@ export async function listNotifications() {
     listShopNotifications().catch(() => [] as AppNotification[]),
   ]);
 
-  return sortByDate([...local, ...feed, ...shop]);
+  return applyNotificationReadOverrides(
+    sortByDate([...local, ...feed, ...shop]),
+  );
 }
 
 export async function getUnreadNotificationCount() {
@@ -130,12 +172,14 @@ export async function getUnreadNotificationCount() {
 }
 
 export async function markNotificationRead(id: string) {
+  rememberNotificationsRead([id]);
   const { source, rawId } = splitId(id);
   if (source === "local") {
     markLocalNotificationRead(id);
     return;
   }
   if (source === "shop") {
+    if (!rawId) return;
     await apiRequest(
       ApiConfig.shopBaseUrl,
       `/api/notifications/${encodeURIComponent(rawId)}/mark-read`,
@@ -143,6 +187,7 @@ export async function markNotificationRead(id: string) {
     );
     return;
   }
+  if (!rawId) return;
   await apiRequest(
     ApiConfig.feedBaseUrl,
     `/api/notifications/${encodeURIComponent(rawId)}/mark-as-read`,
@@ -150,8 +195,15 @@ export async function markNotificationRead(id: string) {
   );
 }
 
-export async function markAllNotificationsRead() {
+export async function markAllNotificationsRead(
+  currentItems?: AppNotification[],
+) {
+  const items = currentItems ?? (await listNotifications().catch(() => []));
+  rememberAllNotificationsRead(items);
   markAllLocalNotificationsRead();
+
+  const unread = items.filter((n) => !n.isRead);
+
   await Promise.allSettled([
     apiRequest(ApiConfig.feedBaseUrl, "/api/notifications/mark-all-as-read", {
       method: "POST",
@@ -159,28 +211,49 @@ export async function markAllNotificationsRead() {
     apiRequest(ApiConfig.shopBaseUrl, "/api/notifications/mark-all-read", {
       method: "POST",
     }),
+    // Per-item fallback when mark-all endpoints no-op on the backend.
+    ...unread.map(async (n) => {
+      const { source, rawId } = splitId(n.id);
+      if (!rawId || source === "local") return;
+      if (source === "shop") {
+        await apiRequest(
+          ApiConfig.shopBaseUrl,
+          `/api/notifications/${encodeURIComponent(rawId)}/mark-read`,
+          { method: "POST" },
+        );
+        return;
+      }
+      await apiRequest(
+        ApiConfig.feedBaseUrl,
+        `/api/notifications/${encodeURIComponent(rawId)}/mark-as-read`,
+        { method: "POST" },
+      );
+    }),
   ]);
 }
 
 export async function deleteNotification(id: string) {
+  rememberNotificationsRead([id]);
   const { source, rawId } = splitId(id);
   if (source === "local") {
     deleteLocalNotification(id);
     return;
   }
   if (source === "shop") {
-    // Shop API may not expose delete; mark read as a soft dismiss.
     try {
-      await apiRequest(
-        ApiConfig.shopBaseUrl,
-        `/api/notifications/${encodeURIComponent(rawId)}/mark-read`,
-        { method: "POST" },
-      );
+      if (rawId) {
+        await apiRequest(
+          ApiConfig.shopBaseUrl,
+          `/api/notifications/${encodeURIComponent(rawId)}/mark-read`,
+          { method: "POST" },
+        );
+      }
     } catch {
       /* ignore */
     }
     return;
   }
+  if (!rawId) return;
   await apiRequest(
     ApiConfig.feedBaseUrl,
     `/api/notifications/${encodeURIComponent(rawId)}`,
