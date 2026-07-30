@@ -88,14 +88,15 @@ export async function register(input: {
   return afterAuth(asAuthResult(data), input.email);
 }
 
-export async function loginWithGoogle(googleToken: string) {
+/** Send Google ID token (JWT / credential), not an OAuth access token. */
+export async function loginWithGoogle(googleIdToken: string) {
   const data = await apiRequest<unknown>(
     ApiConfig.authBaseUrl,
     "/api/auth/sso/google",
     {
       method: "POST",
       auth: false,
-      body: { google_token: googleToken },
+      body: { google_token: googleIdToken },
     },
   );
   return afterAuth(asAuthResult(data));
