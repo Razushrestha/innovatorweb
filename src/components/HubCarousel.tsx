@@ -50,6 +50,7 @@ export function HubCarousel({ slides, onOpen }: Props) {
           alt={slide.title}
           fill
           priority
+          unoptimized
           className="object-cover transition duration-700 group-hover:scale-[1.03]"
         />
         <span className="hub-featured-overlay" />

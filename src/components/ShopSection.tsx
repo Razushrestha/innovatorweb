@@ -2,108 +2,312 @@
 
 import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
+import { ApiException } from "@/lib/api-client";
 import {
+  addShopCartItem,
+  checkoutShop,
   formatRs,
-  shopCategories,
-  shopProducts,
+  getShopCart,
+  getShopProduct,
+  initiateKhaltiPayment,
+  listShopCategories,
+  listShopProducts,
+  removeShopCartItem,
+  updateShopCartItem,
+  type ShopCartItem,
+  type ShopCategory,
   type ShopProduct,
-} from "@/lib/catalog";
-import { CartStore, type CartLine } from "@/lib/cart";
+} from "@/lib/shop-api";
 import { HubCarousel } from "./HubCarousel";
 import { LiquidEmpty, TrustStrip } from "./ui/LiquidChrome";
 
+const PLACEHOLDER = "/shop/product_01.jpg";
+
+type CheckoutForm = {
+  fullName: string;
+  address: string;
+  phoneNumber: string;
+  notes: string;
+};
+
 export function ShopSection() {
-  const [category, setCategory] = useState<(typeof shopCategories)[number]>(
-    "All",
-  );
+  const [categories, setCategories] = useState<ShopCategory[]>([]);
+  const [categorySlug, setCategorySlug] = useState("all");
   const [q, setQ] = useState("");
+  const [search, setSearch] = useState("");
+  const [products, setProducts] = useState<ShopProduct[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<ShopProduct | null>(null);
   const [showCart, setShowCart] = useState(false);
-  const [items, setItems] = useState<CartLine[]>([]);
+  const [items, setItems] = useState<ShopCartItem[]>([]);
+  const [cartBusy, setCartBusy] = useState(false);
   const [added, setAdded] = useState<Record<string, boolean>>({});
-  const [khaltiStep, setKhaltiStep] = useState<"idle" | "pay" | "done">(
-    "idle",
-  );
-  const [phone, setPhone] = useState("");
+  const [step, setStep] = useState<"cart" | "checkout" | "done">("cart");
+  const [form, setForm] = useState<CheckoutForm>({
+    fullName: "",
+    address: "",
+    phoneNumber: "",
+    notes: "",
+  });
   const [paying, setPaying] = useState(false);
+  const [orderId, setOrderId] = useState<string | null>(null);
+  const [orderTotal, setOrderTotal] = useState(0);
+
+  const imageByProduct = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of products) {
+      if (p.image) map.set(p.id, p.image);
+    }
+    if (active?.image) map.set(active.id, active.image);
+    return map;
+  }, [products, active]);
 
   useEffect(() => {
-    setItems(CartStore.getItems());
+    let cancelled = false;
+    (async () => {
+      try {
+        const cats = await listShopCategories();
+        if (!cancelled) setCategories(cats);
+      } catch {
+        if (!cancelled) setCategories([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const filtered = useMemo(() => {
-    return shopProducts.filter((p) => {
-      const catOk = category === "All" || p.category === category;
-      const qOk =
-        !q.trim() ||
-        p.name.toLowerCase().includes(q.toLowerCase()) ||
-        p.description.toLowerCase().includes(q.toLowerCase()) ||
-        p.category.toLowerCase().includes(q.toLowerCase());
-      return catOk && qOk;
-    });
-  }, [category, q]);
+  useEffect(() => {
+    const t = window.setTimeout(() => setSearch(q.trim()), 280);
+    return () => window.clearTimeout(t);
+  }, [q]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const list = await listShopProducts({
+          categorySlug: categorySlug === "all" ? undefined : categorySlug,
+          search: search || undefined,
+        });
+        if (!cancelled) setProducts(list);
+      } catch (e) {
+        if (!cancelled) {
+          setProducts([]);
+          setError(
+            e instanceof ApiException ? e.message : "Failed to load products",
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [categorySlug, search]);
+
+  async function refreshCart() {
+    const next = await getShopCart(imageByProduct);
+    setItems(
+      next.map((line) => ({
+        ...line,
+        image: line.image || imageByProduct.get(line.productId) || PLACEHOLDER,
+      })),
+    );
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const next = await getShopCart(imageByProduct);
+        if (!cancelled) {
+          setItems(
+            next.map((line) => ({
+              ...line,
+              image:
+                line.image ||
+                imageByProduct.get(line.productId) ||
+                PLACEHOLDER,
+            })),
+          );
+        }
+      } catch {
+        // Cart requires auth — ignore until user is signed in.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [imageByProduct]);
 
   const count = items.reduce((n, i) => n + i.quantity, 0);
+  const subtotal = items.reduce((n, i) => n + i.price * i.quantity, 0);
 
-  const slides = shopProducts.slice(0, 3).map((p, i) => ({
+  const slides = products.slice(0, 3).map((p, i) => ({
     id: p.id,
-    image: p.image,
+    image: p.image || PLACEHOLDER,
     badge: i === 0 ? "Featured" : i === 1 ? "Popular" : "New",
     title: p.name,
-    subtitle: p.description.slice(0, 64) + (p.description.length > 64 ? "…" : ""),
+    subtitle:
+      p.description.slice(0, 64) + (p.description.length > 64 ? "…" : ""),
     priceLabel: formatRs(p.price),
   }));
 
-  function refresh(next: CartLine[]) {
-    setItems([...next]);
-    setKhaltiStep("idle");
-  }
-
-  function addProduct(p: ShopProduct) {
-    refresh(CartStore.add(p));
-    setAdded((prev) => ({ ...prev, [p.id]: true }));
+  function flashAdded(productId: string) {
+    setAdded((prev) => ({ ...prev, [productId]: true }));
     window.setTimeout(() => {
-      setAdded((prev) => ({ ...prev, [p.id]: false }));
+      setAdded((prev) => ({ ...prev, [productId]: false }));
     }, 1200);
   }
 
-  async function payKhalti() {
-    const digits = phone.replace(/\D/g, "");
-    if (!(digits.length === 10 && digits.startsWith("9"))) {
+  async function addProduct(p: ShopProduct) {
+    setCartBusy(true);
+    setError(null);
+    try {
+      await addShopCartItem(p.id);
+      await refreshCart();
+      flashAdded(p.id);
+    } catch (e) {
+      setError(e instanceof ApiException ? e.message : "Could not add to cart");
+    } finally {
+      setCartBusy(false);
+    }
+  }
+
+  async function changeQty(line: ShopCartItem, quantity: number) {
+    setCartBusy(true);
+    setError(null);
+    try {
+      if (quantity <= 0) await removeShopCartItem(line.id);
+      else await updateShopCartItem(line.id, quantity);
+      await refreshCart();
+    } catch (e) {
+      setError(e instanceof ApiException ? e.message : "Could not update cart");
+    } finally {
+      setCartBusy(false);
+    }
+  }
+
+  async function openProduct(id: string) {
+    setError(null);
+    const cached = products.find((p) => p.id === id);
+    if (cached) setActive(cached);
+    try {
+      const detail = await getShopProduct(id);
+      setActive(detail);
+    } catch (e) {
+      if (!cached) {
+        setError(
+          e instanceof ApiException ? e.message : "Could not open product",
+        );
+      }
+    }
+  }
+
+  async function placeOrder() {
+    const phone = form.phoneNumber.replace(/\D/g, "");
+    if (!form.fullName.trim() || !form.address.trim()) {
+      alert("Enter your full name and delivery address.");
+      return;
+    }
+    if (!(phone.length === 10 && phone.startsWith("9"))) {
       alert("Enter a valid Nepal mobile (10 digits, starts with 9).");
       return;
     }
+
     setPaying(true);
-    await new Promise((r) => window.setTimeout(r, 1400));
-    CartStore.clear();
-    setItems([]);
-    setPaying(false);
-    setKhaltiStep("done");
+    setError(null);
+    try {
+      const order = await checkoutShop({
+        fullName: form.fullName.trim(),
+        address: form.address.trim(),
+        phoneNumber: phone,
+        notes: form.notes.trim(),
+        paymentType: "khalti",
+      });
+      setOrderId(order.orderId);
+      setOrderTotal(order.grandTotal);
+
+      if (order.requiresKhaltiPayment && order.orderId) {
+        const pay = await initiateKhaltiPayment(order.orderId);
+        if (pay.paymentUrl) {
+          window.open(pay.paymentUrl, "_blank", "noopener,noreferrer");
+        }
+      }
+
+      setItems([]);
+      setStep("done");
+    } catch (e) {
+      setError(
+        e instanceof ApiException ? e.message : "Checkout failed. Try again.",
+      );
+    } finally {
+      setPaying(false);
+    }
   }
 
   if (showCart) {
-    const subtotal = CartStore.subtotal(items);
-    const vat = CartStore.vat(items);
-    const delivery = CartStore.delivery(items);
-    const total = CartStore.grandTotal(items);
-
     return (
       <div className="animate-fade-up space-y-4 pb-8">
         <button
           type="button"
           onClick={() => {
             setShowCart(false);
-            setKhaltiStep("idle");
+            setStep("cart");
           }}
           className="liquid-chip"
         >
           ← Continue shopping
         </button>
 
-        <p className="hub-title">Your cart</p>
+        <p className="hub-title">
+          {step === "checkout"
+            ? "Checkout"
+            : step === "done"
+              ? "Order placed"
+              : "Your cart"}
+        </p>
+
+        {error ? (
+          <p className="rounded-[16px] bg-red-50 px-3 py-2 text-[13px] text-red-700">
+            {error}
+          </p>
+        ) : null}
 
         <div className="liquid-glass p-4 sm:p-5">
-          {items.length === 0 && khaltiStep !== "done" ? (
+          {step === "done" ? (
+            <div className="py-10 text-center">
+              <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-full bg-[var(--repost)] text-2xl text-white shadow-soft">
+                ✓
+              </div>
+              <p className="font-display text-[22px] font-extrabold text-navy">
+                Order placed
+              </p>
+              <p className="mt-1 text-[13.5px] text-muted">
+                {orderId
+                  ? `Order ${orderId.slice(0, 8)}… · ${formatRs(orderTotal)}`
+                  : "Complete payment in the Khalti tab if it opened."}
+              </p>
+              <button
+                type="button"
+                className="liquid-btn liquid-btn-dark mx-auto mt-5 max-w-[200px]"
+                onClick={() => {
+                  setShowCart(false);
+                  setStep("cart");
+                  setOrderId(null);
+                }}
+              >
+                Back to shop
+              </button>
+            </div>
+          ) : null}
+
+          {step === "cart" && items.length === 0 ? (
             <LiquidEmpty
               title="Cart is empty"
               body="Browse the shop and add something you love."
@@ -112,69 +316,34 @@ export function ShopSection() {
             />
           ) : null}
 
-          {khaltiStep === "done" ? (
-            <div className="py-10 text-center">
-              <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-full bg-[var(--repost)] text-2xl text-white shadow-soft">
-                ✓
-              </div>
-              <p className="font-display text-[22px] font-extrabold text-navy">
-                Payment successful
-              </p>
-              <p className="mt-1 text-[13.5px] text-muted">
-                Demo Khalti checkout complete.
-              </p>
-              <button
-                type="button"
-                className="liquid-btn liquid-btn-dark mx-auto mt-5 max-w-[200px]"
-                onClick={() => {
-                  setShowCart(false);
-                  setKhaltiStep("idle");
-                }}
-              >
-                Back to shop
-              </button>
-            </div>
-          ) : null}
-
-          {items.length > 0 && khaltiStep !== "done" ? (
+          {step === "cart" && items.length > 0 ? (
             <>
               <ul className="space-y-2.5">
                 {items.map((line, idx) => (
                   <li
-                    key={line.product.id}
+                    key={line.id}
                     className="liquid-panel flex items-center gap-3 p-2.5"
                   >
                     <span className="w-5 text-center text-[12px] font-bold text-muted">
                       {idx + 1}
                     </span>
                     <div className="relative h-14 w-14 overflow-hidden rounded-[14px]">
-                      <Image
-                        src={line.product.image}
-                        alt=""
-                        fill
-                        className="object-cover"
-                      />
+                      <ProductImage src={line.image} alt="" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-semibold text-navy">
-                        {line.product.name}
+                        {line.productName}
                       </p>
                       <p className="text-[12.5px] text-muted">
-                        {formatRs(line.product.price)}
+                        {formatRs(line.price)}
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
+                        disabled={cartBusy}
                         className="liquid-chip !px-2.5"
-                        onClick={() =>
-                          refresh(
-                            CartStore.setQty(
-                              line.product.id,
-                              line.quantity - 1,
-                            ),
-                          )
-                        }
+                        onClick={() => void changeQty(line, line.quantity - 1)}
                       >
                         −
                       </button>
@@ -183,15 +352,9 @@ export function ShopSection() {
                       </span>
                       <button
                         type="button"
+                        disabled={cartBusy}
                         className="liquid-chip !px-2.5"
-                        onClick={() =>
-                          refresh(
-                            CartStore.setQty(
-                              line.product.id,
-                              line.quantity + 1,
-                            ),
-                          )
-                        }
+                        onClick={() => void changeQty(line, line.quantity + 1)}
                       >
                         +
                       </button>
@@ -202,44 +365,68 @@ export function ShopSection() {
 
               <div className="mt-5 space-y-1.5 border-t border-white/55 pt-4 text-[13.5px]">
                 <Row label="Subtotal" value={formatRs(subtotal)} />
-                <Row label="VAT (13%)" value={formatRs(vat)} />
-                <Row label="Delivery (Nepal)" value={formatRs(delivery)} />
-                <Row label="Total" value={formatRs(total)} bold />
+                <Row label="Shipping" value={formatRs(0)} />
+                <Row label="Total" value={formatRs(subtotal)} bold />
               </div>
 
-              {khaltiStep === "idle" ? (
+              <button
+                type="button"
+                className="liquid-btn khalti-btn mt-4 w-full"
+                onClick={() => setStep("checkout")}
+              >
+                Checkout with Khalti
+              </button>
+            </>
+          ) : null}
+
+          {step === "checkout" ? (
+            <div className="space-y-3">
+              <Field
+                label="Full name"
+                value={form.fullName}
+                onChange={(v) => setForm((f) => ({ ...f, fullName: v }))}
+                placeholder="Your name"
+              />
+              <Field
+                label="Delivery address"
+                value={form.address}
+                onChange={(v) => setForm((f) => ({ ...f, address: v }))}
+                placeholder="City, street, landmark"
+              />
+              <Field
+                label="Mobile (Khalti)"
+                value={form.phoneNumber}
+                onChange={(v) => setForm((f) => ({ ...f, phoneNumber: v }))}
+                placeholder="98XXXXXXXX"
+                inputMode="tel"
+              />
+              <Field
+                label="Notes (optional)"
+                value={form.notes}
+                onChange={(v) => setForm((f) => ({ ...f, notes: v }))}
+                placeholder="Delivery notes"
+              />
+              <div className="space-y-1.5 border-t border-white/55 pt-4 text-[13.5px]">
+                <Row label="Total" value={formatRs(subtotal)} bold />
+              </div>
+              <div className="flex gap-2">
                 <button
                   type="button"
-                  className="liquid-btn khalti-btn mt-4 w-full"
-                  onClick={() => setKhaltiStep("pay")}
+                  className="liquid-chip flex-1"
+                  onClick={() => setStep("cart")}
                 >
-                  Pay with Khalti
+                  Back
                 </button>
-              ) : (
-                <div className="mt-4 space-y-3">
-                  <label className="block space-y-1.5">
-                    <span className="pl-1 text-[12.5px] font-semibold text-muted">
-                      Khalti mobile
-                    </span>
-                    <input
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="98XXXXXXXX"
-                      inputMode="tel"
-                      className="glass-field"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    disabled={paying}
-                    className="liquid-btn khalti-btn w-full"
-                    onClick={() => void payKhalti()}
-                  >
-                    {paying ? "Processing…" : `Confirm · ${formatRs(total)}`}
-                  </button>
-                </div>
-              )}
-            </>
+                <button
+                  type="button"
+                  disabled={paying || items.length === 0}
+                  className="liquid-btn khalti-btn flex-[2]"
+                  onClick={() => void placeOrder()}
+                >
+                  {paying ? "Processing…" : `Pay · ${formatRs(subtotal)}`}
+                </button>
+              </div>
+            </div>
           ) : null}
         </div>
       </div>
@@ -248,6 +435,7 @@ export function ShopSection() {
 
   if (active) {
     const justAdded = !!added[active.id];
+    const hero = active.images[0] || active.image || PLACEHOLDER;
     return (
       <div className="animate-fade-up space-y-4 pb-8">
         <button
@@ -260,12 +448,7 @@ export function ShopSection() {
 
         <div className="liquid-glass overflow-hidden">
           <div className="relative aspect-[16/10]">
-            <Image
-              src={active.image}
-              alt={active.name}
-              fill
-              className="object-cover"
-            />
+            <ProductImage src={hero} alt={active.name} />
           </div>
           <div className="p-5 sm:p-6">
             <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-muted">
@@ -274,23 +457,34 @@ export function ShopSection() {
             <h2 className="mt-1 font-display text-[26px] font-extrabold tracking-[-0.03em] text-navy">
               {active.name}
             </h2>
-            <div className="mt-2 flex items-center gap-2">
-              <span className="liquid-chip !py-1">★ {active.rating}</span>
-              <span className="liquid-chip !py-1">Instant delivery</span>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="liquid-chip !py-1">
+                Stock {active.stock}
+              </span>
+              {active.stock > 0 ? (
+                <span className="liquid-chip !py-1">In stock</span>
+              ) : (
+                <span className="liquid-chip !py-1">Out of stock</span>
+              )}
             </div>
-            <p className="mt-3 text-[14.5px] leading-relaxed text-ink/80">
+            <p className="mt-3 whitespace-pre-wrap text-[14.5px] leading-relaxed text-ink/80">
               {active.description}
             </p>
             <ul className="mt-4 space-y-1.5 text-[13px]">
-              {active.specs.map((s) => (
-                <li
-                  key={s.label}
-                  className="liquid-panel flex justify-between gap-3 px-3 py-2"
-                >
-                  <span className="text-muted">{s.label}</span>
-                  <span className="font-semibold text-navy">{s.value}</span>
-                </li>
-              ))}
+              <li className="liquid-panel flex justify-between gap-3 px-3 py-2">
+                <span className="text-muted">Category</span>
+                <span className="font-semibold text-navy">{active.category}</span>
+              </li>
+              <li className="liquid-panel flex justify-between gap-3 px-3 py-2">
+                <span className="text-muted">Stock</span>
+                <span className="font-semibold text-navy">{active.stock}</span>
+              </li>
+              <li className="liquid-panel flex justify-between gap-3 px-3 py-2">
+                <span className="text-muted">Price</span>
+                <span className="font-semibold text-navy">
+                  {formatRs(active.price)}
+                </span>
+              </li>
             </ul>
           </div>
         </div>
@@ -310,12 +504,17 @@ export function ShopSection() {
           </div>
           <button
             type="button"
-            onClick={() => addProduct(active)}
+            disabled={cartBusy || active.stock <= 0}
+            onClick={() => void addProduct(active)}
             className={`liquid-btn max-w-[200px] ${
               justAdded ? "khalti-btn !bg-[var(--repost)]" : "liquid-btn-dark"
             }`}
           >
-            {justAdded ? "Added ✓" : "Add to cart"}
+            {active.stock <= 0
+              ? "Out of stock"
+              : justAdded
+                ? "Added ✓"
+                : "Add to cart"}
           </button>
         </div>
       </div>
@@ -324,22 +523,27 @@ export function ShopSection() {
 
   return (
     <div className="hub-list relative space-y-5 pb-24 lg:pb-8">
-      <div className="stagger-in" style={{ animationDelay: "0ms" }}>
-        <HubCarousel
-          slides={slides}
-          onOpen={(id) => {
-            const p = shopProducts.find((x) => x.id === id);
-            if (p) setActive(p);
-          }}
-        />
-      </div>
+      {error ? (
+        <p className="rounded-[16px] bg-red-50 px-3 py-2 text-[13px] text-red-700">
+          {error}
+        </p>
+      ) : null}
+
+      {slides.length > 0 ? (
+        <div className="stagger-in" style={{ animationDelay: "0ms" }}>
+          <HubCarousel
+            slides={slides}
+            onOpen={(id) => void openProduct(id)}
+          />
+        </div>
+      ) : null}
 
       <div className="stagger-in" style={{ animationDelay: "60ms" }}>
         <TrustStrip
           items={[
             { label: "Secure checkout", icon: "secure" },
-            { label: "Instant access", icon: "instant" },
-            { label: "7 days refund", icon: "refund" },
+            { label: "Khalti payments", icon: "instant" },
+            { label: "Nepal delivery", icon: "refund" },
           ]}
         />
       </div>
@@ -362,16 +566,25 @@ export function ShopSection() {
       <div className="stagger-in" style={{ animationDelay: "140ms" }}>
         <p className="hub-title mb-3">Categories</p>
         <div className="flex flex-wrap gap-2">
-          {shopCategories.map((c) => (
+          <button
+            type="button"
+            onClick={() => setCategorySlug("all")}
+            className={`liquid-chip ${
+              categorySlug === "all" ? "liquid-chip-active" : ""
+            }`}
+          >
+            All
+          </button>
+          {categories.map((c) => (
             <button
-              key={c}
+              key={c.id}
               type="button"
-              onClick={() => setCategory(c)}
+              onClick={() => setCategorySlug(c.slug || c.id)}
               className={`liquid-chip ${
-                category === c ? "liquid-chip-active" : ""
+                categorySlug === (c.slug || c.id) ? "liquid-chip-active" : ""
               }`}
             >
-              {c}
+              {c.name}
             </button>
           ))}
         </div>
@@ -381,11 +594,17 @@ export function ShopSection() {
         <div className="mb-3 flex items-end justify-between gap-2">
           <p className="hub-title !text-left">Products</p>
           <p className="text-[12.5px] font-semibold text-muted">
-            {filtered.length} item{filtered.length === 1 ? "" : "s"}
+            {loading
+              ? "Loading…"
+              : `${products.length} item${products.length === 1 ? "" : "s"}`}
           </p>
         </div>
 
-        {filtered.length === 0 ? (
+        {loading ? (
+          <div className="grid place-items-center py-16">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-navy/15 border-t-gold" />
+          </div>
+        ) : products.length === 0 ? (
           <LiquidEmpty
             title="No products"
             body="Try another category or keyword."
@@ -394,7 +613,7 @@ export function ShopSection() {
           />
         ) : (
           <div className="hub-grid">
-            {filtered.map((p, i) => {
+            {products.map((p, i) => {
               const justAdded = !!added[p.id];
               return (
                 <article
@@ -404,20 +623,15 @@ export function ShopSection() {
                 >
                   <button
                     type="button"
-                    onClick={() => setActive(p)}
+                    onClick={() => void openProduct(p.id)}
                     className="liquid-press w-full text-left"
                   >
                     <div className="relative aspect-[0.95] p-2">
                       <div className="relative h-full overflow-hidden rounded-[17px]">
-                        <Image
-                          src={p.image}
-                          alt={p.name}
-                          fill
-                          className="object-cover"
-                        />
+                        <ProductImage src={p.image || PLACEHOLDER} alt={p.name} />
                       </div>
                       <span className="absolute right-3.5 top-3.5 rounded-full bg-white/92 px-2 py-0.5 text-[10px] font-bold text-navy shadow-soft">
-                        ★ {p.rating}
+                        {p.stock > 0 ? `${p.stock} left` : "Sold out"}
                       </span>
                     </div>
                     <div className="px-3 pb-2">
@@ -440,7 +654,8 @@ export function ShopSection() {
                     <button
                       type="button"
                       aria-label="Add to cart"
-                      onClick={() => addProduct(p)}
+                      disabled={cartBusy || p.stock <= 0}
+                      onClick={() => void addProduct(p)}
                       className={`liquid-press grid h-8 w-8 place-items-center rounded-[10px] text-[16px] font-bold text-white shadow-soft ${
                         justAdded ? "bg-[var(--repost)]" : "bg-navy"
                       }`}
@@ -457,7 +672,11 @@ export function ShopSection() {
 
       <button
         type="button"
-        onClick={() => setShowCart(true)}
+        onClick={() => {
+          setShowCart(true);
+          setStep("cart");
+          void refreshCart().catch(() => undefined);
+        }}
         className="hub-float-cart liquid-press"
         aria-label="Open cart"
       >
@@ -467,6 +686,50 @@ export function ShopSection() {
         ) : null}
       </button>
     </div>
+  );
+}
+
+function ProductImage({ src, alt }: { src: string; alt: string }) {
+  const [current, setCurrent] = useState(src || PLACEHOLDER);
+  useEffect(() => {
+    setCurrent(src || PLACEHOLDER);
+  }, [src]);
+  return (
+    <Image
+      src={current}
+      alt={alt}
+      fill
+      unoptimized
+      className="object-cover"
+      onError={() => setCurrent(PLACEHOLDER)}
+    />
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  inputMode,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  inputMode?: "text" | "tel" | "email" | "search" | "numeric";
+}) {
+  return (
+    <label className="block space-y-1.5">
+      <span className="pl-1 text-[12.5px] font-semibold text-muted">{label}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        inputMode={inputMode}
+        className="glass-field"
+      />
+    </label>
   );
 }
 

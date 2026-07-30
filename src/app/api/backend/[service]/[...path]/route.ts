@@ -9,6 +9,8 @@ const SERVICES: Record<string, string> = {
   feed: process.env.FEED_URL ?? "http://36.253.137.34:8012",
   chat: process.env.CHAT_URL ?? "http://36.253.137.34:8014",
   search: process.env.SEARCH_URL ?? "http://36.253.137.34:8015",
+  shop: process.env.SHOP_URL ?? "http://36.253.137.34:8016",
+  shopmedia: process.env.SHOP_MEDIA_URL ?? "http://36.253.137.34:8004",
 };
 
 const HOP_BY_HOP = new Set([

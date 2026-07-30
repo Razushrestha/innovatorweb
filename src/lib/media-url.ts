@@ -6,7 +6,16 @@
  * the existing Next.js proxy fetches server-side.
  */
 
-const BACKEND_ORIGINS: { origin: string; service: string }[] = [
+export type MediaService =
+  | "feed"
+  | "profile"
+  | "chat"
+  | "auth"
+  | "search"
+  | "shop"
+  | "shopmedia";
+
+const BACKEND_ORIGINS: { origin: string; service: MediaService }[] = [
   {
     origin: (process.env.NEXT_PUBLIC_AUTH_URL || "http://36.253.137.34:8010").replace(
       /\/$/,
@@ -40,17 +49,32 @@ const BACKEND_ORIGINS: { origin: string; service: string }[] = [
     ).replace(/\/$/, ""),
     service: "search",
   },
+  {
+    origin: (process.env.NEXT_PUBLIC_SHOP_URL || "http://36.253.137.34:8016").replace(
+      /\/$/,
+      "",
+    ),
+    service: "shop",
+  },
+  {
+    origin: (
+      process.env.NEXT_PUBLIC_SHOP_MEDIA_URL || "http://36.253.137.34:8004"
+    ).replace(/\/$/, ""),
+    service: "shopmedia",
+  },
 ];
 
-const PORT_SERVICE: Record<string, string> = {
+const PORT_SERVICE: Record<string, MediaService> = {
   "8010": "auth",
   "8011": "profile",
   "8012": "feed",
   "8014": "chat",
   "8015": "search",
+  "8016": "shop",
+  "8004": "shopmedia",
 };
 
-function serviceForUrl(u: URL): string | null {
+function serviceForUrl(u: URL): MediaService | null {
   const rawOrigin = `${u.protocol}//${u.host}`.replace(/\/$/, "");
   for (const entry of BACKEND_ORIGINS) {
     try {
@@ -78,7 +102,7 @@ function serviceForUrl(u: URL): string | null {
  */
 export function toProxiedMediaUrl(
   url: string | null | undefined,
-  fallbackService: "feed" | "profile" | "chat" | "auth" | "search" = "feed",
+  fallbackService: MediaService = "feed",
 ): string {
   if (!url?.trim()) return "";
   const raw = url.trim();
@@ -116,8 +140,28 @@ export function toProxiedMediaUrl(
 
 export function toProxiedMediaUrlOrNull(
   url: string | null | undefined,
-  fallbackService: "feed" | "profile" | "chat" | "auth" | "search" = "feed",
+  fallbackService: MediaService = "feed",
 ): string | null {
   const proxied = toProxiedMediaUrl(url, fallbackService);
   return proxied || null;
+}
+
+/** Fix known ecommerce media host quirks, then proxy for HTTPS. */
+export function normalizeShopImageUrl(url: string | null | undefined): string {
+  if (!url?.trim()) return "";
+  const fixed = url
+    .trim()
+    .replace(
+      /^(https?:\/\/36\.253\.137\.34):8004(?=products\/)/i,
+      "$1:8004/",
+    )
+    .replace(
+      "http://36.253.137.34:8004products/",
+      "http://36.253.137.34:8004/products/",
+    )
+    .replace(
+      "https://36.253.137.34:8004products/",
+      "https://36.253.137.34:8004/products/",
+    );
+  return toProxiedMediaUrl(fixed, "shopmedia");
 }

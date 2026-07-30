@@ -10,6 +10,8 @@ const DIRECT = {
   feed: "http://36.253.137.34:8012",
   chat: "http://36.253.137.34:8014",
   search: "http://36.253.137.34:8015",
+  shop: "http://36.253.137.34:8016",
+  shopmedia: "http://36.253.137.34:8004",
 } as const;
 
 function resolveUrl(
@@ -51,6 +53,16 @@ export const ApiConfig = {
     process.env.NEXT_PUBLIC_SEARCH_URL,
     "/api/backend/search",
     DIRECT.search,
+  ),
+  shopBaseUrl: resolveUrl(
+    process.env.NEXT_PUBLIC_SHOP_URL,
+    "/api/backend/shop",
+    DIRECT.shop,
+  ),
+  shopMediaBaseUrl: resolveUrl(
+    process.env.NEXT_PUBLIC_SHOP_MEDIA_URL,
+    "/api/backend/shopmedia",
+    DIRECT.shopmedia,
   ),
   feedPageSize: 15,
   googleClientId:
