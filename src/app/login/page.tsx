@@ -46,7 +46,7 @@ export default function LoginPage() {
               Innovator
             </h1>
             <p className="mt-1 text-[14px] font-medium text-muted">
-              Welcome back — sign in to continue
+              Welcome back. Sign in to continue.
             </p>
           </div>
 

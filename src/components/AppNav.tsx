@@ -57,8 +57,8 @@ export function SideNav({
             <span className="block font-display text-[24px] font-extrabold leading-none tracking-[-0.05em] text-navy">
               Innovator
             </span>
-            <span className="mt-1 block text-[11px] font-medium text-muted">
-              Creative network
+            <span className="mt-1 block text-[11px] font-medium italic leading-snug text-muted">
+              Where Every Innovations Get&apos;s Captured
             </span>
           </span>
         </button>
@@ -112,8 +112,29 @@ export function SideNav({
             <button
               type="button"
               onClick={onLogout}
-              className="mt-2 text-[12px] font-semibold text-navy/55 transition hover:text-navy"
+              className="liquid-press mt-3 flex w-full items-center justify-center gap-2 rounded-full border border-navy/10 bg-white px-3 py-2 text-[12.5px] font-bold text-navy shadow-[0_4px_14px_rgba(7,19,35,0.06)] transition hover:border-navy/20 hover:bg-canvas"
             >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden
+              >
+                <path
+                  d="M10 7V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2v-1"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M15 12H4m0 0 3-3m-3 3 3 3"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
               Log out
             </button>
           ) : null}

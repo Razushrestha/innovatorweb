@@ -1,8 +1,9 @@
 import { courses } from "./catalog";
 import { getFeed } from "./feed-api";
+import { normalizeShopImageUrl } from "./media-url";
 import { listMutualCollaborators } from "./mutual-collaborators";
 import { listFollowers, listFollowing } from "./profile-api";
-import { listShopProducts } from "./shop-api";
+import { listShopProductsBasic } from "./shop-api";
 import type { AppNotification } from "./types";
 
 const STORE_KEY = "innovator_activity_notifications_v1";
@@ -85,6 +86,25 @@ function displayName(user: {
   return user.fullName?.trim() || user.username?.trim() || "Someone";
 }
 
+/** Replace em/en dashes in user-facing copy with clean punctuation. */
+export function cleanNotificationCopy(text: string) {
+  return text
+    .replace(/\s*[—–]+\s*/g, ". ")
+    .replace(/\s*--+\s*/g, ". ")
+    .replace(/\.\s*\./g, ".")
+    .replace(/\.\s+([a-z])/g, (_, c: string) => `. ${c.toUpperCase()}`)
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function scrubStoredItems(items: AppNotification[]): AppNotification[] {
+  return items.map((n) => ({
+    ...n,
+    title: cleanNotificationCopy(n.title || ""),
+    message: cleanNotificationCopy(n.message || ""),
+  }));
+}
+
 /** Push a learn enrollment alert (called from Learn UI). */
 export function recordLearnEnrollment(input: {
   courseId: string;
@@ -110,21 +130,44 @@ export function recordLearnEnrollment(input: {
 }
 
 export function getLocalNotifications(): AppNotification[] {
-  return loadStore().items;
+  const store = loadStore();
+  const scrubbed = scrubStoredItems(store.items).filter((n) => !n.isRead);
+  const changed =
+    scrubbed.length !== store.items.length ||
+    scrubbed.some(
+      (n, i) =>
+        n.title !== store.items[i]?.title ||
+        n.message !== store.items[i]?.message,
+    );
+  if (changed) {
+    store.items = scrubbed;
+    saveStore(store);
+  }
+  return scrubbed;
 }
 
 export function markLocalNotificationRead(id: string) {
   const store = loadStore();
-  store.items = store.items.map((n) =>
-    n.id === id ? { ...n, isRead: true } : n,
-  );
+  // Remove read alerts so they don't slow future loads.
+  store.items = store.items.filter((n) => n.id !== id);
   saveStore(store);
 }
 
 export function markAllLocalNotificationsRead() {
   const store = loadStore();
-  store.items = store.items.map((n) => ({ ...n, isRead: true }));
+  store.items = [];
   saveStore(store);
+}
+
+/** Drop any already-read local alerts from storage. */
+export function pruneReadLocalNotifications() {
+  const store = loadStore();
+  const next = store.items.filter((n) => !n.isRead);
+  if (next.length !== store.items.length) {
+    store.items = next;
+    saveStore(store);
+  }
+  return next;
 }
 
 export function deleteLocalNotification(id: string) {
@@ -147,7 +190,7 @@ export async function syncActivityNotifications(): Promise<AppNotification[]> {
       listFollowing(null),
       listMutualCollaborators(),
       getFeed(1),
-      listShopProducts(),
+      listShopProductsBasic(),
     ]);
 
   const followers =
@@ -229,7 +272,7 @@ export async function syncActivityNotifications(): Promise<AppNotification[]> {
     items = upsert(items, {
       id: makeId("mutual", user.id),
       title: "Mutual collaborators",
-      message: `You and ${name} collaborate with each other — chat is unlocked.`,
+      message: `You and ${name} collaborate with each other. Chat is unlocked.`,
       type: "collaborate",
       senderUsername: user.username,
       senderAvatar: user.avatar,
@@ -272,11 +315,13 @@ export async function syncActivityNotifications(): Promise<AppNotification[]> {
     if (!product.isActive) continue;
     items = upsert(items, {
       id: makeId("product", product.id),
-      title: "New shop product",
-      message: `${product.name} was added to the shop${
-        product.category ? ` · ${product.category}` : ""
+      title: "New Product Added!",
+      message: `${product.name} is now available${
+        product.category ? ` in ${product.category}` : " in the shop"
       }.`,
       type: "product",
+      senderAvatar:
+        normalizeShopImageUrl(product.image) || product.image || null,
       isRead: false,
       createdAt: now,
       source: "local",
@@ -292,6 +337,7 @@ export async function syncActivityNotifications(): Promise<AppNotification[]> {
       title: "New e-learning course",
       message: `${course.name} is now available in E-learning.`,
       type: "learn",
+      senderAvatar: course.image || null,
       isRead: false,
       createdAt: now,
       source: "local",
@@ -300,7 +346,55 @@ export async function syncActivityNotifications(): Promise<AppNotification[]> {
     });
   }
 
-  store.items = items;
+  // Backfill thumbnails on older product/course alerts that were stored without images.
+  const productById = new Map(products.map((p) => [p.id, p]));
+  const courseById = new Map(courses.map((c) => [c.id, c]));
+  items = items.map((item) => {
+    if (item.senderAvatar?.trim()) return item;
+    if (item.relatedProductId) {
+      const p = productById.get(item.relatedProductId);
+      const image =
+        normalizeShopImageUrl(p?.image || p?.images?.[0] || "") ||
+        p?.image?.trim() ||
+        p?.images?.[0] ||
+        "";
+      if (image) {
+        return {
+          ...item,
+          senderAvatar: image,
+          type: item.type || "product",
+          targetTab: "shop",
+        };
+      }
+    }
+    // local:product:<id> without relatedProductId
+    const localProduct = item.id.match(/^local:product:(.+)$/i);
+    if (localProduct?.[1]) {
+      const p = productById.get(localProduct[1]);
+      const image =
+        normalizeShopImageUrl(p?.image || p?.images?.[0] || "") ||
+        p?.image?.trim() ||
+        p?.images?.[0] ||
+        "";
+      if (image) {
+        return {
+          ...item,
+          relatedProductId: localProduct[1],
+          senderAvatar: image,
+          type: item.type || "product",
+          targetTab: "shop",
+        };
+      }
+    }
+    if (item.relatedCourseId) {
+      const image = courseById.get(item.relatedCourseId)?.image;
+      if (image) return { ...item, senderAvatar: image, type: item.type || "learn" };
+    }
+    return item;
+  });
+
+  // Keep only unread local alerts in storage for faster notification loads.
+  store.items = scrubStoredItems(items).filter((n) => !n.isRead);
   store.snapshot = {
     followerIds,
     followingIds,

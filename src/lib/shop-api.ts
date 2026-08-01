@@ -104,14 +104,11 @@ function asProduct(raw: Record<string, unknown>): ShopProduct {
 }
 
 /**
- * List payload omits galleries. Pull detail for a small first page so cards can
- * auto-scroll multiple photos. Broken files are skipped in the UI via onError
- * (no HEAD preflight — that flooded the network log).
+ * Pull gallery details for a specific batch of products (used by shop lazy pages).
+ * Mutates and returns the same product objects with enriched images.
  */
-async function enrichProductImages(products: ShopProduct[], limit = 12) {
-  const targets = products
-    .filter((p) => p.images.length <= 1)
-    .slice(0, limit);
+export async function enrichShopProductBatch(products: ShopProduct[]) {
+  const targets = products.filter((p) => p.images.length <= 1);
   if (!targets.length) return products;
 
   const concurrency = 4;
@@ -127,8 +124,13 @@ async function enrichProductImages(products: ShopProduct[], limit = 12) {
             p.image,
           ]);
           const working = await resolveWorkingShopImages(sources);
-          p.images = working;
-          p.image = working[0] ?? "";
+          if (working.length) {
+            p.images = working;
+            p.image = working[0] ?? p.image;
+          } else if (detail.image) {
+            p.image = detail.image;
+            p.images = detail.images.length ? detail.images : [detail.image];
+          }
         } catch {
           // keep list cover
         }
@@ -136,6 +138,11 @@ async function enrichProductImages(products: ShopProduct[], limit = 12) {
     );
   }
   return products;
+}
+
+/** @deprecated Prefer enrichShopProductBatch for paged shop UIs. */
+async function enrichProductImages(products: ShopProduct[], limit = 12) {
+  return enrichShopProductBatch(products.slice(0, limit));
 }
 
 function uniqueImages(urls: Array<string | null | undefined>) {
@@ -181,8 +188,10 @@ export async function resolveWorkingShopImages(urls: string[]) {
     for (const candidate of shopImageCandidates(raw)) {
       if (!candidate || tried.has(candidate)) continue;
       tried.add(candidate);
-      if (await probeShopImage(candidate)) {
-        out.push(candidate);
+      // Probe the proxied HTTPS URL so mixed-content doesn't false-fail on Vercel.
+      const proxied = normalizeShopImageUrl(candidate) || candidate;
+      if (await probeShopImage(proxied)) {
+        out.push(proxied);
         break;
       }
     }
@@ -250,7 +259,7 @@ export async function listShopCategories() {
   return unwrapList(data).map(asCategory).filter((c) => c.id && c.name);
 }
 
-export async function listShopProducts(opts?: {
+async function fetchShopProductList(opts?: {
   categorySlug?: string;
   search?: string;
 }) {
@@ -263,10 +272,107 @@ export async function listShopProducts(opts?: {
     query: Object.keys(query).length ? query : undefined,
   });
 
-  const products = unwrapList(data)
+  return unwrapList(data)
     .map(asProduct)
     .filter((p) => p.id && p.isActive);
+}
+
+/** Fast catalog list with cover images (no per-item gallery probing). */
+export async function listShopProductsBasic(opts?: {
+  categorySlug?: string;
+  search?: string;
+}) {
+  return fetchShopProductList(opts);
+}
+
+export async function listShopProducts(opts?: {
+  categorySlug?: string;
+  search?: string;
+}) {
+  const products = await fetchShopProductList(opts);
   return enrichProductImages(products);
+}
+
+/** Resolve a product cover by id or fuzzy name for notifications / cards. */
+export async function findShopProductImage(input: {
+  productId?: string | null;
+  nameHint?: string | null;
+}): Promise<{ productId?: string; image: string; name?: string }> {
+  const productId = input.productId?.trim() || "";
+  const hint = (input.nameHint || "").trim();
+
+  if (productId) {
+    try {
+      const detail = await getShopProduct(productId);
+      const image =
+        detail.image?.trim() ||
+        detail.images.find((u) => !!u?.trim()) ||
+        "";
+      if (image) {
+        return {
+          productId: detail.id,
+          name: detail.name,
+          image: normalizeShopImageUrl(image) || image,
+        };
+      }
+    } catch {
+      /* fall through to catalog */
+    }
+  }
+
+  const products = await listShopProductsBasic().catch(() => [] as ShopProduct[]);
+  if (productId) {
+    const byId = products.find((p) => p.id === productId);
+    if (byId?.image) {
+      return {
+        productId: byId.id,
+        name: byId.name,
+        image: byId.image,
+      };
+    }
+  }
+
+  const needle = hint
+    .replace(/\s+is now available.*$/i, "")
+    .replace(/\s+was added.*$/i, "")
+    .replace(/\s+added to.*$/i, "")
+    .trim()
+    .toLowerCase();
+
+  if (needle) {
+    const exact = products.find((p) => p.name.trim().toLowerCase() === needle);
+    if (exact?.image) {
+      return { productId: exact.id, name: exact.name, image: exact.image };
+    }
+
+    // Token overlap fuzzy match (handles long hardware product titles).
+    const tokens = needle.split(/[^a-z0-9]+/).filter((t) => t.length > 2);
+    let best: ShopProduct | null = null;
+    let bestScore = 0;
+    for (const p of products) {
+      const name = p.name.toLowerCase();
+      if (!p.image) continue;
+      if (name.includes(needle) || needle.includes(name)) {
+        return { productId: p.id, name: p.name, image: p.image };
+      }
+      if (!tokens.length) continue;
+      const nameTokens = new Set(
+        name.split(/[^a-z0-9]+/).filter((t) => t.length > 2),
+      );
+      let hit = 0;
+      for (const t of tokens) if (nameTokens.has(t)) hit += 1;
+      const score = hit / tokens.length;
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    if (best?.image && bestScore >= 0.55) {
+      return { productId: best.id, name: best.name, image: best.image };
+    }
+  }
+
+  return { image: "" };
 }
 
 export async function getShopProduct(productId: string) {

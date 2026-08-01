@@ -101,7 +101,7 @@ export const courses: Course[] = [
     chapters: 12,
     students: "5.6k",
     description:
-      "Go from blank project to a polished app — widgets, state, navigation, networking, and shipping patterns.",
+      "Go from blank project to a polished app: widgets, state, navigation, networking, and shipping patterns.",
     videoUrl: vButterfly,
     image: "/courses/course_02.jpg",
   },
@@ -129,7 +129,7 @@ export const courses: Course[] = [
     chapters: 9,
     students: "1.9k",
     description:
-      "Design, consume, and secure REST APIs — auth, pagination, caching, and production error handling.",
+      "Design, consume, and secure REST APIs: auth, pagination, caching, and production error handling.",
     videoUrl: vEscapes,
     image: "/courses/course_04.jpg",
   },
@@ -157,7 +157,7 @@ export const courses: Course[] = [
     chapters: 4,
     students: "980",
     description:
-      "Structure a story investors remember — slide craft, delivery drills, and objection handling.",
+      "Structure a story investors remember: slide craft, delivery drills, and objection handling.",
     videoUrl: vMeltdowns,
     image: "/courses/course_06.jpg",
   },
@@ -313,7 +313,7 @@ export const shopProducts: ShopProduct[] = [
     rating: 4.5,
     image: "/shop/product_08.jpg",
     description:
-      "A single-page teaser for problem, solution, traction, and the ask — built for a 30-second skim.",
+      "A single-page teaser for problem, solution, traction, and the ask, built for a 30-second skim.",
     specs: [
       { label: "Format", value: "PDF · Figma · Docs" },
       { label: "Pages", value: "1 page · 2 variants" },

@@ -18,13 +18,48 @@ import { NotificationsSection } from "@/components/NotificationsSection";
 import { ProfileSection } from "@/components/ProfileSection";
 import { SearchSection } from "@/components/SearchSection";
 import { ShopSection } from "@/components/ShopSection";
-import { BrandMark } from "@/components/BrandMark";
 import { logout } from "@/lib/auth-api";
 import { AuthSession } from "@/lib/auth-session";
 import { getUnreadNotificationCount } from "@/lib/notifications-api";
 import { sendPresenceHeartbeat } from "@/lib/presence";
 import type { ChatPeerRequest } from "@/lib/types";
 import type { NotificationOpenTarget } from "@/components/NotificationsSection";
+
+const APP_TABS: AppTab[] = [
+  "feed",
+  "chat",
+  "learn",
+  "search",
+  "post",
+  "shop",
+  "profile",
+  "notifications",
+];
+
+function isAppTab(value: string | null | undefined): value is AppTab {
+  return !!value && APP_TABS.includes(value as AppTab);
+}
+
+function tabFromLocation(): AppTab {
+  if (typeof window === "undefined") return "feed";
+  try {
+    const raw = new URLSearchParams(window.location.search).get("tab");
+    return isAppTab(raw) ? raw : "feed";
+  } catch {
+    return "feed";
+  }
+}
+
+function writeTabToLocation(next: AppTab) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (next === "feed") url.searchParams.delete("tab");
+  else url.searchParams.set("tab", next);
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextUrl) {
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }
+}
 
 export default function AppShellPage() {
   const router = useRouter();
@@ -39,10 +74,15 @@ export default function AppShellPage() {
     name?: string | null;
   } | null>(null);
 
+  function goToTab(next: AppTab) {
+    setTab(next);
+    writeTabToLocation(next);
+  }
+
   function startChat(peer: ChatPeerRequest) {
     setAuthorView(null);
     setChatPeer(peer);
-    setTab("chat");
+    goToTab("chat");
   }
 
   function openNotificationTarget(target: NotificationOpenTarget) {
@@ -56,10 +96,10 @@ export default function AppShellPage() {
       return;
     }
     if (target.tab === "feed" || target.tab === "shop" || target.tab === "learn") {
-      setTab(target.tab);
+      goToTab(target.tab);
       return;
     }
-    if (target.tab) setTab(target.tab as AppTab);
+    if (target.tab && isAppTab(target.tab)) goToTab(target.tab);
   }
 
   useEffect(() => {
@@ -69,8 +109,16 @@ export default function AppShellPage() {
     }
     const session = AuthSession.load();
     setEmail(session.email);
+    // Restore last tab from the URL before showing the shell.
+    setTab(tabFromLocation());
     setReady(true);
   }, [router]);
+
+  // Keep ?tab= in sync whenever the active section changes.
+  useEffect(() => {
+    if (!ready) return;
+    writeTabToLocation(tab);
+  }, [tab, ready]);
 
   useEffect(() => {
     if (!ready) return;
@@ -149,10 +197,10 @@ export default function AppShellPage() {
 
           <div className="app-surface flex min-h-0 flex-1 justify-center gap-6 overflow-hidden pt-3 lg:gap-8 lg:pt-5 xl:gap-10">
             <main
-              className={`app-surface liquid-scroll min-h-0 w-full min-w-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-28 sm:px-0 lg:pb-8 ${
+              className={`app-surface liquid-scroll min-h-0 w-full min-w-0 flex-1 overscroll-contain px-1 sm:px-0 ${
                 tab === "chat" && !authorView
-                  ? "max-w-[980px]"
-                  : "max-w-[640px]"
+                  ? "flex max-w-[820px] flex-col overflow-hidden pb-20 lg:pb-4"
+                  : "max-w-[640px] overflow-y-auto pb-28 lg:pb-8"
               }`}
             >
               {authorView ? (
@@ -220,18 +268,7 @@ export default function AppShellPage() {
             <aside className="app-surface hidden h-full w-[268px] shrink-0 py-5 xl:block">
               <div className="liquid-rail liquid-scroll flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain p-4">
                 <div className="px-1 pb-4">
-                  <div className="mb-3 flex items-center gap-2.5">
-                    <BrandMark size={36} variant="soft" />
-                    <div className="min-w-0">
-                      <p className="font-display text-[16px] font-extrabold tracking-[-0.03em] text-navy">
-                        Innovator
-                      </p>
-                      <p className="text-[11px] font-medium text-muted">
-                        Workspace
-                      </p>
-                    </div>
-                  </div>
-                  <p className="mt-1.5 font-display text-[19px] font-extrabold leading-snug tracking-[-0.03em] text-navy">
+                  <p className="font-display text-[19px] font-extrabold leading-snug tracking-[-0.03em] text-navy">
                     Build with the community
                   </p>
                   <p className="mt-1.5 text-[13px] leading-relaxed text-muted">

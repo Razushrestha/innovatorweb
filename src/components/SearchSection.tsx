@@ -74,18 +74,26 @@ function UserAvatar({
   size?: number;
 }) {
   const letter = (user.username || "?").slice(0, 1).toUpperCase();
+  const [failed, setFailed] = useState(false);
+  const showPhoto = Boolean(user.avatar) && !failed;
+
+  useEffect(() => {
+    setFailed(false);
+  }, [user.avatar, user.id]);
+
   return (
     <span
-      className="chat-avatar chat-avatar-ring relative shrink-0"
+      className="chat-avatar chat-avatar-ring relative shrink-0 overflow-hidden"
       style={{ width: size, height: size, fontSize: size * 0.36 }}
     >
-      {user.avatar ? (
+      {showPhoto ? (
         <Image
-          src={user.avatar}
+          src={user.avatar!}
           alt=""
           fill
           unoptimized
           className="object-cover"
+          onError={() => setFailed(true)}
         />
       ) : (
         letter
@@ -309,7 +317,7 @@ export function SearchSection({ onOpenAuthor }: Props) {
             </div>
             {suggested.length === 0 ? (
               <p className="px-1 py-8 text-center text-[13px] text-muted">
-                No suggestions yet — collaborate with people to grow your network.
+                No suggestions yet. Collaborate with people to grow your network.
               </p>
             ) : (
               <ul>

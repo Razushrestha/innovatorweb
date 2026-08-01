@@ -1,18 +1,24 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiException } from "@/lib/api-client";
+import {
+  normalizeShopImageUrl,
+  toProxiedMediaUrl,
+} from "@/lib/media-url";
 import {
   deleteNotification,
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
 } from "@/lib/notifications-api";
+import { getProfileByAuthUserId } from "@/lib/profile-api";
+import { searchAll } from "@/lib/search-api";
+import { findShopProductImage } from "@/lib/shop-api";
 import type { AppNotification, NotificationTargetTab } from "@/lib/types";
 import { LiquidError, LiquidLoader } from "./ui/LiquidChrome";
 
-type Filter = "all" | "unread";
 type NotifKind =
   | "like"
   | "comment"
@@ -164,7 +170,6 @@ export function NotificationsSection({
   const [items, setItems] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<Filter>("all");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [markingAll, setMarkingAll] = useState(false);
 
@@ -173,7 +178,7 @@ export function NotificationsSection({
       setLoading(true);
       const next = await listNotifications();
       setItems(next);
-      onUnreadChange?.(next.filter((n) => !n.isRead).length);
+      onUnreadChange?.(next.length);
       setError(null);
     } catch (e) {
       setError(
@@ -194,21 +199,14 @@ export function NotificationsSection({
       void listNotifications()
         .then((next) => {
           setItems(next);
-          onUnreadChange?.(next.filter((n) => !n.isRead).length);
+          onUnreadChange?.(next.length);
         })
         .catch(() => undefined);
     }, 45000);
     return () => window.clearInterval(timer);
   }, [onUnreadChange]);
 
-  const unread = useMemo(
-    () => items.filter((n) => !n.isRead).length,
-    [items],
-  );
-  const shown = useMemo(
-    () => items.filter((n) => (filter === "all" ? true : !n.isRead)),
-    [items, filter],
-  );
+  const unread = items.length;
 
   const groups = useMemo(() => {
     const order = ["today", "yesterday", "earlier"] as const;
@@ -217,20 +215,20 @@ export function NotificationsSection({
       yesterday: [],
       earlier: [],
     };
-    for (const n of shown) {
+    for (const n of items) {
       map[dayKey(n.createdAt)].push(n);
     }
     return order
       .filter((k) => map[k].length > 0)
       .map((k) => ({ key: k, label: groupLabel(k), items: map[k] }));
-  }, [shown]);
+  }, [items]);
 
   async function onMarkRead(id: string) {
     setBusyId(id);
-    // Optimistic UI first so the row clears even if a backend call lags.
+    // Remove from the list immediately — read alerts are not shown again.
     setItems((prev) => {
-      const next = prev.map((x) => (x.id === id ? { ...x, isRead: true } : x));
-      onUnreadChange?.(next.filter((n) => !n.isRead).length);
+      const next = prev.filter((x) => x.id !== id);
+      onUnreadChange?.(next.length);
       return next;
     });
     try {
@@ -246,10 +244,9 @@ export function NotificationsSection({
     if (unread === 0 || markingAll) return;
     setMarkingAll(true);
     const snapshot = items;
-    // Optimistic: clear unread immediately so the button feels instant.
-    setItems((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    // Optimistic: clear the list — only unread alerts are kept.
+    setItems([]);
     onUnreadChange?.(0);
-    if (filter === "unread") setFilter("all");
     try {
       await markAllNotificationsRead(snapshot);
     } catch {
@@ -283,22 +280,9 @@ export function NotificationsSection({
   return (
     <div className="notif-shell space-y-3 pb-8">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setFilter("all")}
-            className={`liquid-chip ${filter === "all" ? "liquid-chip-active" : ""}`}
-          >
-            All
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter("unread")}
-            className={`liquid-chip ${filter === "unread" ? "liquid-chip-active" : ""}`}
-          >
-            Unread{unread > 0 ? ` · ${unread}` : ""}
-          </button>
-        </div>
+        <p className="text-[13px] font-semibold text-navy/55">
+          {unread > 0 ? `${unread} unread` : "All caught up"}
+        </p>
         <button
           type="button"
           disabled={unread === 0 || markingAll}
@@ -317,25 +301,15 @@ export function NotificationsSection({
         <LiquidError message={error} onRetry={() => void load()} />
       ) : null}
 
-      {!error && shown.length === 0 ? (
+      {!error && items.length === 0 ? (
         <div className="px-1 py-14 text-center">
           <p className="font-display text-[18px] font-extrabold tracking-[-0.03em] text-navy">
-            {filter === "unread" ? "No unread alerts" : "You’re caught up"}
+            You’re caught up
           </p>
           <p className="mx-auto mt-1.5 max-w-[38ch] text-[13.5px] leading-relaxed text-muted">
-            {filter === "unread"
-              ? "Everything here has been reviewed."
-              : "Collaborations, mutual posts, shop products, and e-learning updates show up here."}
+            New collaborations, mutual posts, shop products, and e-learning
+            updates will show up here.
           </p>
-          {filter === "unread" ? (
-            <button
-              type="button"
-              onClick={() => setFilter("all")}
-              className="mt-4 text-[13px] font-semibold text-navy/60 underline-offset-2 hover:text-navy hover:underline"
-            >
-              View all
-            </button>
-          ) : null}
         </div>
       ) : null}
 
@@ -361,25 +335,22 @@ export function NotificationsSection({
                         className={`notif-item ${n.isRead ? "" : "unread"}`}
                       >
                         <div className="notif-avatar-wrap" aria-hidden>
-                          <div className="notif-avatar">
-                            {n.senderAvatar ? (
-                              <Image
-                                src={n.senderAvatar}
-                                alt=""
-                                width={44}
-                                height={44}
-                                unoptimized
-                              />
-                            ) : kind === "product" ? (
-                              <KindIcon kind="product" size={20} />
-                            ) : kind === "learn" ? (
-                              <KindIcon kind="learn" size={20} />
-                            ) : (
-                              <span className="font-display text-[16px] font-bold">
-                                {letter}
-                              </span>
-                            )}
-                          </div>
+                          <NotifAvatar
+                            src={n.senderAvatar}
+                            letter={letter}
+                            kind={kind}
+                            productId={
+                              n.relatedProductId ||
+                              n.id.match(/^local:product:(.+)$/i)?.[1] ||
+                              null
+                            }
+                            productHint={n.message}
+                            userId={n.relatedUserId}
+                            username={
+                              n.senderUsername ||
+                              (!/\s/.test(n.title.trim()) ? n.title.trim() : null)
+                            }
+                          />
                           <span className={`notif-type-badge ${kind}`}>
                             <KindIcon kind={kind} />
                           </span>
@@ -452,6 +423,178 @@ export function NotificationsSection({
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function resolveNotifImage(src: string | null | undefined, kind: NotifKind) {
+  const raw = src?.trim() || "";
+  if (!raw) return "";
+  // Public app assets (courses, logos) — keep same-origin paths as-is.
+  if (
+    raw.startsWith("/courses/") ||
+    raw.startsWith("/innovator") ||
+    raw.startsWith("/app_") ||
+    raw.startsWith("/center_")
+  ) {
+    return raw;
+  }
+  if (kind === "product") {
+    return normalizeShopImageUrl(raw) || toProxiedMediaUrl(raw, "shopmedia");
+  }
+  if (kind === "learn") {
+    if (raw.startsWith("/")) return raw;
+    return toProxiedMediaUrl(raw, "feed") || raw;
+  }
+  return toProxiedMediaUrl(raw, "profile");
+}
+
+async function fetchUserAvatar(
+  userId: string | null | undefined,
+  username: string | null | undefined,
+): Promise<string> {
+  if (userId?.trim()) {
+    try {
+      const profile = await getProfileByAuthUserId(userId.trim());
+      const avatar = profile.avatar?.trim() || "";
+      if (avatar) return toProxiedMediaUrl(avatar, "profile") || avatar;
+    } catch {
+      /* try username search */
+    }
+  }
+
+  const q = username?.trim().replace(/^@/, "");
+  if (!q) return "";
+
+  try {
+    const { users } = await searchAll(q);
+    const needle = q.toLowerCase();
+    const hit =
+      users.find((u) => u.username.toLowerCase() === needle) ||
+      users.find((u) => u.username.toLowerCase().includes(needle)) ||
+      users[0];
+    if (hit?.avatar?.trim()) return hit.avatar;
+    if (hit?.id) {
+      try {
+        const profile = await getProfileByAuthUserId(hit.id);
+        const avatar = profile.avatar?.trim() || "";
+        if (avatar) return toProxiedMediaUrl(avatar, "profile") || avatar;
+      } catch {
+        /* no photo */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
+async function fetchProductImage(
+  productId: string | null | undefined,
+  hint: string | null | undefined,
+): Promise<string> {
+  try {
+    const found = await findShopProductImage({
+      productId,
+      nameHint: hint,
+    });
+    return found.image || "";
+  } catch {
+    return "";
+  }
+}
+
+function NotifAvatar({
+  src,
+  letter,
+  kind,
+  productId,
+  productHint,
+  userId,
+  username,
+}: {
+  src?: string | null;
+  letter: string;
+  kind: NotifKind;
+  productId?: string | null;
+  productHint?: string | null;
+  userId?: string | null;
+  username?: string | null;
+}) {
+  const initial = useMemo(() => resolveNotifImage(src, kind), [src, kind]);
+  const [photo, setPhoto] = useState(initial);
+  const [failed, setFailed] = useState(false);
+  const fetchTried = useRef(false);
+  const peopleKind =
+    kind === "like" ||
+    kind === "comment" ||
+    kind === "collaborate" ||
+    kind === "mention" ||
+    kind === "post";
+
+  useEffect(() => {
+    setPhoto(initial);
+    setFailed(false);
+    fetchTried.current = false;
+  }, [initial, productId, productHint, userId, username]);
+
+  useEffect(() => {
+    if (photo && !failed) return;
+    if (fetchTried.current) return;
+    fetchTried.current = true;
+    let cancelled = false;
+
+    const run =
+      kind === "product"
+        ? fetchProductImage(productId, productHint)
+        : peopleKind
+          ? fetchUserAvatar(userId, username)
+          : Promise.resolve("");
+
+    void run.then((url) => {
+      if (cancelled || !url) return;
+      setPhoto(url);
+      setFailed(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    kind,
+    peopleKind,
+    photo,
+    failed,
+    productId,
+    productHint,
+    userId,
+    username,
+  ]);
+
+  if (photo && !failed) {
+    return (
+      <div className="notif-avatar notif-avatar-photo">
+        <Image
+          src={photo}
+          alt=""
+          fill
+          sizes="44px"
+          unoptimized
+          className="object-cover"
+          onError={() => setFailed(true)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="notif-avatar">
+      {kind === "product" ? (
+        <KindIcon kind="product" size={20} />
+      ) : kind === "learn" ? (
+        <KindIcon kind="learn" size={20} />
+      ) : (
+        <span className="notif-avatar-fallback">{letter}</span>
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -12,12 +13,13 @@ import { ApiException } from "@/lib/api-client";
 import {
   addShopCartItem,
   checkoutShop,
+  enrichShopProductBatch,
   formatRs,
   getShopCart,
   getShopProductWithGallery,
   initiateKhaltiPayment,
   listShopCategories,
-  listShopProducts,
+  listShopProductsBasic,
   removeShopCartItem,
   updateShopCartItem,
   type ShopCartItem,
@@ -26,6 +28,10 @@ import {
 } from "@/lib/shop-api";
 import { HubCarousel } from "./HubCarousel";
 import { LiquidEmpty, TrustStrip } from "./ui/LiquidChrome";
+
+const PAGE_SIZE = 10;
+/** Flat all-Nepal delivery charge (matches mobile cart). */
+const SHIPPING_CHARGE = 200;
 
 type CheckoutForm = {
   fullName: string;
@@ -39,9 +45,15 @@ export function ShopSection() {
   const [categorySlug, setCategorySlug] = useState("all");
   const [q, setQ] = useState("");
   const [search, setSearch] = useState("");
-  const [products, setProducts] = useState<ShopProduct[]>([]);
+  /** Full filtered catalog from the API (covers only). */
+  const [catalog, setCatalog] = useState<ShopProduct[]>([]);
+  /** How many catalog items are currently shown. */
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const enrichingRef = useRef<Set<string>>(new Set());
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const [active, setActive] = useState<ShopProduct | null>(null);
   const [showCart, setShowCart] = useState(false);
   const [items, setItems] = useState<ShopCartItem[]>([]);
@@ -58,14 +70,39 @@ export function ShopSection() {
   const [orderId, setOrderId] = useState<string | null>(null);
   const [orderTotal, setOrderTotal] = useState(0);
 
+  const products = useMemo(
+    () => catalog.slice(0, visibleCount),
+    [catalog, visibleCount],
+  );
+  const hasMore = visibleCount < catalog.length;
+
   const imageByProduct = useMemo(() => {
     const map = new Map<string, string>();
-    for (const p of products) {
+    for (const p of catalog) {
       if (p.image) map.set(p.id, p.image);
     }
     if (active?.image) map.set(active.id, active.image);
     return map;
-  }, [products, active]);
+  }, [catalog, active]);
+
+  const enrichVisible = useCallback(async (items: ShopProduct[]) => {
+    const pending = items.filter(
+      (p) => p.images.length <= 1 && !enrichingRef.current.has(p.id),
+    );
+    if (!pending.length) return;
+    for (const p of pending) enrichingRef.current.add(p.id);
+    try {
+      await enrichShopProductBatch(pending);
+      setCatalog((prev) =>
+        prev.map((p) => {
+          const updated = pending.find((x) => x.id === p.id);
+          return updated ?? p;
+        }),
+      );
+    } finally {
+      for (const p of pending) enrichingRef.current.delete(p.id);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -92,15 +129,20 @@ export function ShopSection() {
     (async () => {
       setLoading(true);
       setError(null);
+      setVisibleCount(PAGE_SIZE);
+      enrichingRef.current.clear();
       try {
-        const list = await listShopProducts({
+        const list = await listShopProductsBasic({
           categorySlug: categorySlug === "all" ? undefined : categorySlug,
           search: search || undefined,
         });
-        if (!cancelled) setProducts(list);
+        if (cancelled) return;
+        setCatalog(list);
+        const firstPage = list.slice(0, PAGE_SIZE);
+        void enrichVisible(firstPage);
       } catch (e) {
         if (!cancelled) {
-          setProducts([]);
+          setCatalog([]);
           setError(
             e instanceof ApiException ? e.message : "Failed to load products",
           );
@@ -112,7 +154,31 @@ export function ShopSection() {
     return () => {
       cancelled = true;
     };
-  }, [categorySlug, search]);
+  }, [categorySlug, search, enrichVisible]);
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || !hasMore) return;
+    const start = visibleCount;
+    const next = Math.min(start + PAGE_SIZE, catalog.length);
+    if (next <= start) return;
+    setLoadingMore(true);
+    const batch = catalog.slice(start, next);
+    setVisibleCount(next);
+    void enrichVisible(batch).finally(() => setLoadingMore(false));
+  }, [catalog, enrichVisible, hasMore, loadingMore, visibleCount]);
+
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    if (!node || !hasMore || loading) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMore();
+      },
+      { root: null, rootMargin: "280px 0px", threshold: 0 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, loadMore, loading, products.length]);
 
   async function refreshCart() {
     const next = await getShopCart(imageByProduct);
@@ -148,6 +214,8 @@ export function ShopSection() {
 
   const count = items.reduce((n, i) => n + i.quantity, 0);
   const subtotal = items.reduce((n, i) => n + i.price * i.quantity, 0);
+  const shipping = items.length > 0 ? SHIPPING_CHARGE : 0;
+  const total = subtotal + shipping;
 
   const slides = products
     .filter((p) => !!p.image)
@@ -199,12 +267,12 @@ export function ShopSection() {
 
   async function openProduct(id: string) {
     setError(null);
-    const cached = products.find((p) => p.id === id);
+    const cached = catalog.find((p) => p.id === id);
     if (cached) setActive(cached);
     try {
       const detail = await getShopProductWithGallery(id);
       setActive(detail);
-      setProducts((prev) =>
+      setCatalog((prev) =>
         prev.map((p) =>
           p.id === id
             ? { ...p, image: detail.image, images: detail.images }
@@ -379,8 +447,8 @@ export function ShopSection() {
 
               <div className="mt-5 space-y-1.5 border-t border-white/55 pt-4 text-[13.5px]">
                 <Row label="Subtotal" value={formatRs(subtotal)} />
-                <Row label="Shipping" value={formatRs(0)} />
-                <Row label="Total" value={formatRs(subtotal)} bold />
+                <Row label="Shipping" value={formatRs(shipping)} />
+                <Row label="Total" value={formatRs(total)} bold />
               </div>
 
               <button
@@ -421,7 +489,9 @@ export function ShopSection() {
                 placeholder="Delivery notes"
               />
               <div className="space-y-1.5 border-t border-white/55 pt-4 text-[13.5px]">
-                <Row label="Total" value={formatRs(subtotal)} bold />
+                <Row label="Subtotal" value={formatRs(subtotal)} />
+                <Row label="Shipping" value={formatRs(shipping)} />
+                <Row label="Total" value={formatRs(total)} bold />
               </div>
               <div className="flex gap-2">
                 <button
@@ -437,7 +507,7 @@ export function ShopSection() {
                   className="liquid-btn khalti-btn flex-[2]"
                   onClick={() => void placeOrder()}
                 >
-                  {paying ? "Processing…" : `Pay · ${formatRs(subtotal)}`}
+                  {paying ? "Processing…" : `Pay · ${formatRs(total)}`}
                 </button>
               </div>
             </div>
@@ -611,7 +681,9 @@ export function ShopSection() {
           <p className="text-[12.5px] font-semibold text-muted">
             {loading
               ? "Loading…"
-              : `${products.length} item${products.length === 1 ? "" : "s"}`}
+              : catalog.length === 0
+                ? "0 items"
+                : `Showing ${products.length} of ${catalog.length}`}
           </p>
         </div>
 
@@ -627,69 +699,80 @@ export function ShopSection() {
             onAction={q ? () => setQ("") : undefined}
           />
         ) : (
-          <div className="hub-grid">
-            {products.map((p, i) => {
-              const justAdded = !!added[p.id];
-              return (
-                <article
-                  key={p.id}
-                  className="hub-card stagger-in overflow-hidden rounded-[22px]"
-                  style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => void openProduct(p.id)}
-                    className="liquid-press w-full text-left"
+          <>
+            <div className="hub-grid">
+              {products.map((p, i) => {
+                const justAdded = !!added[p.id];
+                return (
+                  <article
+                    key={p.id}
+                    className="hub-card stagger-in overflow-hidden rounded-[22px]"
+                    style={{ animationDelay: `${Math.min(i % PAGE_SIZE, 8) * 40}ms` }}
                   >
-                    <div className="relative aspect-[0.95] p-2">
-                      <div className="relative h-full overflow-hidden rounded-[17px]">
-                        <ProductCardScroller
-                          images={[...p.images, p.image]}
-                          alt={p.name}
-                        />
-                      </div>
-                      <span className="absolute right-3.5 top-3.5 rounded-full bg-white/92 px-2 py-0.5 text-[10px] font-bold text-navy shadow-soft">
-                        {p.stock > 0 ? `${p.stock} left` : "Sold out"}
-                      </span>
-                      {p.images.length > 1 ? (
-                        <span className="absolute bottom-3.5 left-3.5 rounded-full bg-navy/80 px-2 py-0.5 text-[10px] font-bold text-white shadow-soft">
-                          {p.images.length} photos
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="px-3 pb-2">
-                      <p className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted">
-                        {p.category}
-                      </p>
-                      <h3 className="mt-0.5 line-clamp-2 font-display text-[14.5px] font-bold leading-snug text-navy">
-                        {p.name}
-                      </h3>
-                    </div>
-                  </button>
-                  <div className="flex items-center justify-between gap-2 px-3 pb-3">
-                    <span
-                      className={`text-[13.5px] font-bold ${
-                        justAdded ? "text-[var(--repost)]" : "text-navy"
-                      }`}
-                    >
-                      {formatRs(p.price)}
-                    </span>
                     <button
                       type="button"
-                      aria-label="Add to cart"
-                      disabled={cartBusy || p.stock <= 0}
-                      onClick={() => void addProduct(p)}
-                      className={`liquid-press grid h-8 w-8 place-items-center rounded-[10px] text-[16px] font-bold text-white shadow-soft ${
-                        justAdded ? "bg-[var(--repost)]" : "bg-navy"
-                      }`}
+                      onClick={() => void openProduct(p.id)}
+                      className="liquid-press w-full text-left"
                     >
-                      {justAdded ? "✓" : "+"}
+                      <div className="relative aspect-[0.95] p-2">
+                        <div className="relative h-full overflow-hidden rounded-[17px]">
+                          <ProductCardScroller
+                            images={[...p.images, p.image]}
+                            alt={p.name}
+                          />
+                        </div>
+                        <span className="absolute right-3.5 top-3.5 rounded-full bg-white/92 px-2 py-0.5 text-[10px] font-bold text-navy shadow-soft">
+                          {p.stock > 0 ? `${p.stock} left` : "Sold out"}
+                        </span>
+                        {p.images.length > 1 ? (
+                          <span className="absolute bottom-3.5 left-3.5 rounded-full bg-navy/80 px-2 py-0.5 text-[10px] font-bold text-white shadow-soft">
+                            {p.images.length} photos
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="px-3 pb-2">
+                        <p className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted">
+                          {p.category}
+                        </p>
+                        <h3 className="mt-0.5 line-clamp-2 font-display text-[14.5px] font-bold leading-snug text-navy">
+                          {p.name}
+                        </h3>
+                      </div>
                     </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+                    <div className="flex items-center justify-between gap-2 px-3 pb-3">
+                      <span
+                        className={`text-[13.5px] font-bold ${
+                          justAdded ? "text-[var(--repost)]" : "text-navy"
+                        }`}
+                      >
+                        {formatRs(p.price)}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Add to cart"
+                        disabled={cartBusy || p.stock <= 0}
+                        onClick={() => void addProduct(p)}
+                        className={`liquid-press grid h-8 w-8 place-items-center rounded-[10px] text-[16px] font-bold text-white shadow-soft ${
+                          justAdded ? "bg-[var(--repost)]" : "bg-navy"
+                        }`}
+                      >
+                        {justAdded ? "✓" : "+"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            <div
+              ref={loadMoreRef}
+              className="mt-2 flex min-h-8 items-center justify-center py-4"
+            >
+              {loadingMore ? (
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-navy/15 border-t-gold" />
+              ) : null}
+            </div>
+          </>
         )}
       </div>
 

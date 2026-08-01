@@ -193,7 +193,7 @@ export async function apiRequest<T>(
         });
       } catch {
         throw new ApiException(
-          "Network error — cannot reach the API. Check connection or try again.",
+          "Network error. Cannot reach the API. Check connection or try again.",
         );
       }
 
@@ -239,7 +239,7 @@ export async function apiMultipart<T>(
         });
       } catch {
         throw new ApiException(
-          "Network error — cannot reach the API. Check connection or try again.",
+          "Network error. Cannot reach the API. Check connection or try again.",
         );
       }
 

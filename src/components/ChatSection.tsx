@@ -24,10 +24,8 @@ import {
   sendMediaMessage,
   sendMessage,
 } from "@/lib/chat-api";
-import {
-  isMutualCollaborator,
-  listMutualCollaborators,
-} from "@/lib/mutual-collaborators";
+import { resolveChatPeer } from "@/lib/chat-peer";
+import { listMutualCollaborators } from "@/lib/mutual-collaborators";
 import { applyChatUnread, markChatRoomRead } from "@/lib/chat-unread";
 import {
   fetchOnlineMap,
@@ -109,6 +107,32 @@ function peerName(p?: ChatParticipant | null) {
   return p?.username?.trim() || "Innovator";
 }
 
+function sameUserId(a?: string | null, b?: string | null) {
+  return Boolean(a && b && a === b);
+}
+
+function sameUsername(a?: string | null, b?: string | null) {
+  const left = (a ?? "").trim().toLowerCase();
+  const right = (b ?? "").trim().toLowerCase();
+  return Boolean(left && right && left === right);
+}
+
+function findRoomForPeer(
+  list: ChatConversation[],
+  myUserId: string | null,
+  userId?: string | null,
+  username?: string | null,
+) {
+  return (
+    list.find((room) => {
+      const p = peerOf(room, myUserId);
+      if (sameUserId(p?.userId, userId)) return true;
+      if (sameUsername(p?.username, username)) return true;
+      return false;
+    }) ?? null
+  );
+}
+
 function PeerAvatar({
   peer,
   size = 44,
@@ -164,15 +188,16 @@ export function ChatSection({
   const me = AuthSession.load().userId;
   const [rooms, setRooms] = useState<ChatConversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  /** Keeps the open thread visible even if a poll briefly omits the room. */
+  const [pinnedRoom, setPinnedRoom] = useState<ChatConversation | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [attachFile, setAttachFile] = useState<File | null>(null);
   const [attachPreview, setAttachPreview] = useState<string | null>(null);
-  const [showNew, setShowNew] = useState(false);
   const [mutualPeers, setMutualPeers] = useState<ProfileListUser[]>([]);
-  const [mutualLoading, setMutualLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [startingPeerId, setStartingPeerId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -182,13 +207,29 @@ export function ChatSection({
   const bottomRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const startingRef = useRef(false);
+  const activeIdRef = useRef<string | null>(null);
+  const mutualPeersRef = useRef<ProfileListUser[]>([]);
+  const roomsSigRef = useRef("");
+  const mutualSigRef = useRef("");
   const pendingKey = pendingPeer?.userId ?? "";
   const myUsername = AuthSession.load().username;
 
-  const active = useMemo(
-    () => rooms.find((r) => r.id === activeId) ?? null,
-    [rooms, activeId],
-  );
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  useEffect(() => {
+    mutualPeersRef.current = mutualPeers;
+  }, [mutualPeers]);
+
+  const active = useMemo(() => {
+    if (!activeId) return null;
+    return (
+      rooms.find((r) => r.id === activeId) ??
+      (pinnedRoom?.id === activeId ? pinnedRoom : null)
+    );
+  }, [rooms, activeId, pinnedRoom]);
   const peer = active ? peerOf(active, me) : null;
 
   const peerIds = useMemo(() => {
@@ -236,66 +277,44 @@ export function ChatSection({
         userIds: peerIds,
         usernames: peerUsernames,
       }).then((map) => {
-        if (!cancelled) setOnlineMap(map);
+        if (cancelled) return;
+        setOnlineMap((prev) => {
+          const keys = Object.keys(map);
+          if (
+            keys.length === Object.keys(prev).length &&
+            keys.every((k) => prev[k] === map[k])
+          ) {
+            return prev;
+          }
+          return map;
+        });
       });
     };
     refresh();
-    const timer = window.setInterval(refresh, 8000);
+    const timer = window.setInterval(refresh, 20000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
   }, [peerIds, peerUsernames]);
 
-  /** Ensure every mutual collaborator has a conversation row in Messages. */
-  const syncMutualRooms = useCallback(async () => {
-    try {
-      const [list, mutual] = await Promise.all([
-        listConversations(),
-        listMutualCollaborators(),
-      ]);
-      setMutualPeers(mutual);
-
-      const existingPeerIds = new Set(
-        list
-          .map((room) => peerOf(room, me)?.userId)
-          .filter((id): id is string => Boolean(id)),
-      );
-      const existingPeerNames = new Set(
-        list
-          .map((room) =>
-            (peerOf(room, me)?.username ?? "").trim().toLowerCase(),
-          )
-          .filter(Boolean),
-      );
-
-      const missing = mutual.filter((u) => {
-        if (!u.id) return false;
-        if (existingPeerIds.has(u.id)) return false;
-        const uname = (u.username ?? "").trim().toLowerCase();
-        if (uname && existingPeerNames.has(uname)) return false;
-        return true;
-      });
-
-      if (missing.length > 0) {
-        await Promise.allSettled(
-          missing.map((u) =>
-            createConversation({
-              participantUserId: u.id,
-              participantUsername:
-                u.username?.trim() || u.fullName?.trim() || undefined,
-            }),
-          ),
-        );
-      }
-
-      const next = missing.length > 0 ? await listConversations() : list;
-      // Prefer mutual usernames on participants when chat API omits them.
+  const enrichRooms = useCallback(
+    (list: ChatConversation[], mutual: ProfileListUser[]) => {
       const byId = new Map(mutual.map((u) => [u.id, u]));
-      const enriched = next.map((room) => {
+      const byName = new Map(
+        mutual
+          .filter((u) => u.username?.trim())
+          .map((u) => [u.username!.trim().toLowerCase(), u] as const),
+      );
+
+      const enriched = list.map((room) => {
         const p = peerOf(room, me);
-        if (!p?.userId) return room;
-        const m = byId.get(p.userId);
+        if (!p) return room;
+        const m =
+          (p.userId ? byId.get(p.userId) : undefined) ||
+          (p.username
+            ? byName.get(p.username.trim().toLowerCase())
+            : undefined);
         if (!m) return room;
         if (p.username && p.avatar) return room;
         return {
@@ -312,7 +331,6 @@ export function ChatSection({
         };
       });
 
-      // Active threads first, then alphabetical by peer name.
       enriched.sort((a, b) => {
         const aMsg = a.lastMessage?.createdAt
           ? Date.parse(a.lastMessage.createdAt)
@@ -324,50 +342,111 @@ export function ChatSection({
         return peerName(peerOf(a, me)).localeCompare(peerName(peerOf(b, me)));
       });
 
-      const unreadById = applyChatUnread(enriched, me, activeId);
-      setLocalUnread(unreadById);
-      setRooms(
-        enriched.map((room) => ({
-          ...room,
-          unreadCount: unreadById[room.id] ?? room.unreadCount,
-        })),
-      );
+      const unreadById = applyChatUnread(enriched, me, activeIdRef.current);
+      return enriched.map((room) => ({
+        ...room,
+        unreadCount: unreadById[room.id] ?? room.unreadCount,
+      }));
+    },
+    [me],
+  );
+
+  const roomsSignature = useCallback((list: ChatConversation[]) => {
+    return list
+      .map((r) => {
+        const p = peerOf(r, me);
+        return [
+          r.id,
+          r.unreadCount,
+          r.lastMessage?.id ?? "",
+          r.lastMessage?.content ?? "",
+          p?.userId ?? "",
+          p?.username ?? "",
+        ].join(":");
+      })
+      .join("|");
+  }, [me]);
+
+  /** Initial + rare full load (conversations + mutuals). Never mass-creates rooms. */
+  const loadInbox = useCallback(async () => {
+    if (startingRef.current) return;
+    try {
+      const [list, mutual] = await Promise.all([
+        listConversations(),
+        listMutualCollaborators(),
+      ]);
+      if (startingRef.current) return;
+
+      const mutualSig = mutual.map((u) => u.id).join(",");
+      if (mutualSig !== mutualSigRef.current) {
+        mutualSigRef.current = mutualSig;
+        setMutualPeers(mutual);
+      }
+
+      const next = enrichRooms(list, mutual);
+      const sig = roomsSignature(next);
+      if (sig !== roomsSigRef.current) {
+        roomsSigRef.current = sig;
+        const unreadById = applyChatUnread(next, me, activeIdRef.current);
+        setLocalUnread(unreadById);
+        setRooms(next);
+      }
       setError(null);
     } catch (e) {
       setError(e instanceof ApiException ? e.message : "Could not load chats");
     } finally {
       setLoading(false);
     }
-  }, [me, activeId]);
+  }, [enrichRooms, roomsSignature, me]);
+
+  /** Light poll: conversations only, skip setState when nothing changed. */
+  const pollInbox = useCallback(async () => {
+    if (startingRef.current || document.hidden) return;
+    try {
+      const list = await listConversations();
+      if (startingRef.current) return;
+      const next = enrichRooms(list, mutualPeersRef.current);
+      const sig = roomsSignature(next);
+      if (sig === roomsSigRef.current) return;
+      roomsSigRef.current = sig;
+      const unreadById = applyChatUnread(next, me, activeIdRef.current);
+      setLocalUnread(unreadById);
+      setRooms(next);
+    } catch {
+      /* ignore quiet poll errors */
+    }
+  }, [enrichRooms, roomsSignature, me]);
 
   const refreshRooms = useCallback(async () => {
-    await syncMutualRooms();
-  }, [syncMutualRooms]);
+    await loadInbox();
+  }, [loadInbox]);
 
   useEffect(() => {
-    void syncMutualRooms();
-  }, [syncMutualRooms]);
+    void loadInbox();
+  }, [loadInbox]);
 
-  // Poll inbox so new messages show +1 / +2 badges quickly.
+  // Gentle inbox poll — no mutual re-fetch, no auto-create, no flicker.
   useEffect(() => {
     const timer = window.setInterval(() => {
-      void syncMutualRooms();
-    }, 4000);
+      void pollInbox();
+    }, 20000);
     return () => window.clearInterval(timer);
-  }, [syncMutualRooms]);
+  }, [pollInbox]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, activeId]);
 
-  // Soft refresh while a thread is open
+  // Soft refresh while a thread is open (messages only).
   useEffect(() => {
     if (!activeId) return;
     const timer = window.setInterval(() => {
+      if (document.hidden || startingRef.current) return;
       void (async () => {
         try {
           const msgs = await listMessages(activeId);
           const next = [...msgs].reverse();
+          let changed = false;
           setMessages((prev) => {
             const pending = prev.filter((m) => m.pending);
             if (pending.length === 0 && next.length === prev.length) {
@@ -375,22 +454,30 @@ export function ChatSection({
               const lastNext = next[next.length - 1]?.id;
               if (lastPrev === lastNext) return prev;
             }
+            changed = true;
             return [...next, ...pending];
           });
+          if (!changed) return;
           void markRead(activeId);
           const tip = next[next.length - 1]?.id;
           markChatRoomRead(activeId, tip);
-          setLocalUnread((prev) => ({ ...prev, [activeId]: 0 }));
-          setRooms((prev) =>
-            prev.map((r) =>
-              r.id === activeId ? { ...r, unreadCount: 0 } : r,
-            ),
+          setLocalUnread((prev) =>
+            prev[activeId] === 0 ? prev : { ...prev, [activeId]: 0 },
           );
+          setRooms((prev) => {
+            const room = prev.find((r) => r.id === activeId);
+            if (!room || room.unreadCount === 0) return prev;
+            const updated = prev.map((r) =>
+              r.id === activeId ? { ...r, unreadCount: 0 } : r,
+            );
+            roomsSigRef.current = roomsSignature(updated);
+            return updated;
+          });
         } catch {
           /* ignore poll errors */
         }
       })();
-    }, 4000);
+    }, 12000);
     return () => window.clearInterval(timer);
   }, [activeId]);
 
@@ -402,6 +489,8 @@ export function ChatSection({
   }
 
   async function openRoom(id: string) {
+    const existing = rooms.find((r) => r.id === id) ?? null;
+    if (existing) setPinnedRoom(existing);
     setActiveId(id);
     setBusy(true);
     setMessages([]);
@@ -426,37 +515,122 @@ export function ChatSection({
     }
   }
 
-  async function startChatWith(userId: string, username?: string | null) {
-    if (!userId) return;
-    setBusy(true);
+  async function startChatWith(
+    userId: string,
+    username?: string | null,
+    avatar?: string | null,
+  ) {
+    if ((!userId && !username) || startingRef.current) return;
+    startingRef.current = true;
+    setStartingPeerId(userId || username || "peer");
     setError(null);
+    setBusy(true);
     try {
-      let list = await listConversations();
-      setRooms(list);
-      let room = list.find((r) => peerOf(r, me)?.userId === userId) ?? null;
-      if (!room) {
-        const mutual = await isMutualCollaborator(userId);
-        if (!mutual) {
-          setError("Chat is only available with mutual collaborators.");
-          return;
+      const resolved = await resolveChatPeer(userId, username, avatar);
+      let list = rooms.length ? rooms : await listConversations();
+      let room = findRoomForPeer(
+        list,
+        me,
+        resolved.userId,
+        resolved.username,
+      );
+
+      // Drop stale rooms whose participant id no longer matches (post-migration).
+      if (room) {
+        const p = peerOf(room, me);
+        if (
+          p?.userId &&
+          resolved.userId &&
+          p.userId !== resolved.userId
+        ) {
+          room = null;
         }
-        room = await createConversation({
-          participantUserId: userId,
-          participantUsername: username?.trim() || undefined,
-        });
-        list = await listConversations();
-        setRooms(list);
-        room = list.find((r) => r.id === room!.id) ?? room;
       }
 
+      if (!room) {
+        try {
+          list = await listConversations();
+          room = findRoomForPeer(
+            list,
+            me,
+            resolved.userId,
+            resolved.username,
+          );
+          if (room) {
+            const p = peerOf(room, me);
+            if (
+              p?.userId &&
+              resolved.userId &&
+              p.userId !== resolved.userId
+            ) {
+              room = null;
+            }
+          }
+        } catch {
+          /* keep local list */
+        }
+      }
+
+      if (!room) {
+        room = await createConversation({
+          participantUserId: resolved.userId,
+          participantUsername: resolved.username,
+          participantAvatar: resolved.avatar || undefined,
+        });
+        if (!room.id) {
+          throw new ApiException("Could not create conversation");
+        }
+        if (!peerOf(room, me)?.userId) {
+          room = {
+            ...room,
+            participants: [
+              ...room.participants,
+              {
+                userId: resolved.userId,
+                username: resolved.username ?? null,
+                avatar: resolved.avatar ?? null,
+              },
+            ],
+          };
+        }
+        try {
+          const refreshed = await listConversations();
+          room =
+            findRoomForPeer(
+              refreshed,
+              me,
+              resolved.userId,
+              resolved.username,
+            ) ??
+            refreshed.find((r) => r.id === room!.id) ??
+            room;
+          list = refreshed;
+        } catch {
+          /* keep created room */
+        }
+      }
+
+      const merged = [
+        room,
+        ...list.filter((r) => r.id !== room!.id),
+      ].map((r) =>
+        r.id === room!.id ? { ...r, unreadCount: 0 } : r,
+      );
+      roomsSigRef.current = roomsSignature(merged);
+      setPinnedRoom(room);
+      setRooms(merged);
       setActiveId(room.id);
       setMessages([]);
-      const msgs = await listMessages(room.id);
-      setMessages([...msgs].reverse());
-      void markRead(room.id);
-      setRooms((prev) =>
-        prev.map((r) => (r.id === room!.id ? { ...r, unreadCount: 0 } : r)),
-      );
+
+      try {
+        const msgs = await listMessages(room.id);
+        setMessages([...msgs].reverse());
+        void markRead(room.id);
+        markChatRoomRead(room.id, msgs[0]?.id ?? null);
+      } catch {
+        /* thread can still open empty */
+      }
+
       window.setTimeout(() => {
         composerRef.current?.focus();
         resizeComposer();
@@ -466,6 +640,8 @@ export function ChatSection({
         err instanceof ApiException ? err.message : "Could not start chat",
       );
     } finally {
+      startingRef.current = false;
+      setStartingPeerId(null);
       setBusy(false);
     }
   }
@@ -479,20 +655,6 @@ export function ChatSection({
     // Intentionally only when a new pending peer arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingKey]);
-
-  useEffect(() => {
-    if (!showNew) return;
-    setMutualLoading(true);
-    void (async () => {
-      try {
-        setMutualPeers(await listMutualCollaborators());
-      } catch {
-        setMutualPeers([]);
-      } finally {
-        setMutualLoading(false);
-      }
-    })();
-  }, [showNew]);
 
   function clearAttachment() {
     if (attachPreview?.startsWith("blob:")) {
@@ -523,6 +685,94 @@ export function ChatSection({
     setAttachPreview(
       kind === "image" || kind === "video" ? URL.createObjectURL(file) : null,
     );
+  }
+
+  function isAccessDenied(err: unknown) {
+    if (!(err instanceof ApiException)) return false;
+    const msg = (err.message || "").toLowerCase();
+    return (
+      err.status === 403 ||
+      msg.includes("access denied") ||
+      msg.includes("forbidden") ||
+      msg.includes("not allowed") ||
+      msg.includes("permission")
+    );
+  }
+
+  /**
+   * After follower migrations, old rooms can still show history but reject
+   * sends. Recreate the DM with the peer's current auth id and retry once.
+   */
+  async function recreateActiveConversation() {
+    const current = active;
+    const p = current ? peerOf(current, me) : peer;
+    const mutual =
+      mutualPeers.find(
+        (u) =>
+          sameUserId(u.id, p?.userId) ||
+          sameUsername(u.username, p?.username),
+      ) ?? null;
+    const resolved = await resolveChatPeer(
+      mutual?.id || p?.userId,
+      mutual?.username || p?.username,
+      mutual?.avatar || p?.avatar,
+    );
+    // Drop the broken room locally and on the server when possible.
+    if (current?.id) {
+      setRooms((prev) => prev.filter((r) => r.id !== current.id));
+      try {
+        await deleteConversation(current.id);
+      } catch {
+        /* still try to create a fresh DM */
+      }
+    }
+    const room = await createConversation({
+      participantUserId: resolved.userId,
+      participantUsername: resolved.username,
+      participantAvatar: resolved.avatar || undefined,
+    });
+    if (!room.id) {
+      throw new ApiException("Could not refresh this conversation.");
+    }
+    const enrichedRoom: ChatConversation = {
+      ...room,
+      participants:
+        room.participants.length > 0
+          ? room.participants.map((part) =>
+              part.userId === me
+                ? part
+                : {
+                    ...part,
+                    userId: part.userId || resolved.userId,
+                    username: part.username || resolved.username || null,
+                    avatar: part.avatar || resolved.avatar || null,
+                  },
+            )
+          : [
+              {
+                userId: resolved.userId,
+                username: resolved.username ?? null,
+                avatar: resolved.avatar ?? null,
+              },
+            ],
+      unreadCount: 0,
+    };
+    setPinnedRoom(enrichedRoom);
+    setRooms((prev) => {
+      const next = [
+        enrichedRoom,
+        ...prev.filter(
+          (r) =>
+            r.id !== enrichedRoom.id &&
+            r.id !== current?.id &&
+            peerOf(r, me)?.userId !== resolved.userId,
+        ),
+      ];
+      roomsSigRef.current = roomsSignature(next);
+      return next;
+    });
+    setActiveId(enrichedRoom.id);
+    return enrichedRoom.id;
   }
 
   async function onSend(e?: FormEvent) {
@@ -557,13 +807,40 @@ export function ChatSection({
     };
     setDraft("");
     clearAttachment();
+    setError(null);
     setMessages((prev) => [...prev, optimistic]);
     setSending(true);
     window.setTimeout(resizeComposer, 0);
+
+    let conversationId = activeId;
     try {
-      const msg = file
-        ? await sendMediaMessage(activeId, file, text)
-        : await sendMessage(activeId, text);
+      // If this room doesn't include the signed-in user, refresh it first.
+      const roomNow =
+        rooms.find((r) => r.id === conversationId) ||
+        (pinnedRoom?.id === conversationId ? pinnedRoom : null);
+      if (
+        roomNow &&
+        me &&
+        roomNow.participants.length > 0 &&
+        !roomNow.participants.some((p) => p.userId === me)
+      ) {
+        conversationId = await recreateActiveConversation();
+      }
+
+      const sendOnce = (id: string) =>
+        file
+          ? sendMediaMessage(id, file, text)
+          : sendMessage(id, text);
+
+      let msg: ChatMessage;
+      try {
+        msg = await sendOnce(conversationId);
+      } catch (err) {
+        if (!isAccessDenied(err)) throw err;
+        conversationId = await recreateActiveConversation();
+        msg = await sendOnce(conversationId);
+      }
+
       setMessages((prev) =>
         prev.map((m) =>
           m.id === tempId
@@ -583,11 +860,17 @@ export function ChatSection({
         setAttachFile(file);
         setAttachPreview(optimistic.localPreviewUrl ?? null);
       }
-      setError(
-        err instanceof ApiException
-          ? err.message
-          : "Could not send attachment",
-      );
+      if (isAccessDenied(err)) {
+        setError(
+          "Can't send in this chat right now. Make sure you still collaborate with each other, then open Message again from their profile.",
+        );
+      } else {
+        setError(
+          err instanceof ApiException
+            ? err.message
+            : "Could not send message",
+        );
+      }
     } finally {
       setSending(false);
       composerRef.current?.focus();
@@ -606,25 +889,64 @@ export function ChatSection({
     if (!window.confirm("Delete this conversation?")) return;
     await deleteConversation(activeId);
     setActiveId(null);
+    setPinnedRoom(null);
     setMessages([]);
     void refreshRooms();
   }
+
+  const qNorm = query.toLowerCase().trim();
 
   const filtered = rooms.filter((r) => {
     const p = peerOf(r, me);
     const name = peerName(p).toLowerCase();
     const preview = (r.lastMessage?.content || "").toLowerCase();
-    const q = query.toLowerCase().trim();
-    if (!q) return true;
-    return name.includes(q) || preview.includes(q);
+    if (!qNorm) return true;
+    return name.includes(qNorm) || preview.includes(qNorm);
   });
+
+  const roomPeerIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const room of rooms) {
+      const id = peerOf(room, me)?.userId;
+      if (id) ids.add(id);
+    }
+    return ids;
+  }, [rooms, me]);
+
+  const roomPeerNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const room of rooms) {
+      const name = (peerOf(room, me)?.username ?? "").trim().toLowerCase();
+      if (name) names.add(name);
+    }
+    return names;
+  }, [rooms, me]);
+
+  const startableMutuals = useMemo(() => {
+    return mutualPeers.filter((u) => {
+      if (!u.id) return false;
+      if (roomPeerIds.has(u.id)) return false;
+      const uname = (u.username ?? "").trim().toLowerCase();
+      if (uname && roomPeerNames.has(uname)) return false;
+      if (!qNorm) return true;
+      const name = (u.fullName || u.username || "").toLowerCase();
+      return name.includes(qNorm) || uname.includes(qNorm);
+    });
+  }, [mutualPeers, roomPeerIds, roomPeerNames, qNorm]);
 
   if (loading) {
     return <LiquidLoader label="Loading conversations…" />;
   }
 
+  const metaParts = [
+    `${rooms.length} conversation${rooms.length === 1 ? "" : "s"}`,
+  ];
+  if (mutualPeers.length > 0) {
+    metaParts.push(`${mutualPeers.length} mutual`);
+  }
+
   return (
-    <div className="animate-fade-up pb-4">
+    <div className="chat-page animate-fade-up">
       <div className="chat-shell">
         {/* List */}
         <div
@@ -632,37 +954,18 @@ export function ChatSection({
             activeId ? "hidden md:flex" : "flex"
           } min-h-0 flex-1 md:flex-none`}
         >
-          <div className="px-4 pb-3 pt-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div>
-                <p className="font-display text-[20px] font-extrabold tracking-[-0.03em] text-navy">
-                  Messages
-                </p>
-                <p className="text-[12px] text-muted">
-                  {rooms.length} conversation{rooms.length === 1 ? "" : "s"}
-                  {mutualPeers.length > 0
-                    ? ` · ${mutualPeers.length} mutual`
-                    : ""}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowNew(true)}
-                className="liquid-press inline-flex h-9 w-9 items-center justify-center rounded-full bg-navy text-gold ring-1 ring-gold/45"
-                aria-label="New chat"
-                title="New chat"
-              >
-                <IconPlus />
-              </button>
-            </div>
-            <div className="relative">
+          <div className="chat-list-head">
+            <p className="chat-list-kicker">Inbox</p>
+            <h2 className="chat-list-title">Messages</h2>
+            <p className="chat-list-meta">{metaParts.join(" · ")}</p>
+            <div className="chat-search-wrap">
               <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-navy/35">
                 <IconSearch />
               </span>
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search…"
+                placeholder="Search people or messages"
                 className="chat-search"
               />
             </div>
@@ -672,80 +975,149 @@ export function ChatSection({
             <p className="px-4 pb-2 text-[12.5px] text-red-600">{error}</p>
           ) : null}
 
-          <ul className="liquid-scroll flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
-            {filtered.length === 0 ? (
-              <li className="mx-1 my-4 rounded-[20px] border border-dashed border-navy/10 bg-white/50 px-4 py-10 text-center">
-                <BrandMark size={44} variant="navy" className="mx-auto mb-3" />
-                <p className="font-display text-[15px] font-bold text-navy">
-                  {query ? "No matches" : "No conversations yet"}
+          <div className="chat-list-scroll liquid-scroll">
+            {filtered.length === 0 && startableMutuals.length === 0 ? (
+              <div className="chat-list-empty">
+                <div className="chat-list-empty-mark">
+                  <BrandMark size={34} variant="plain" />
+                </div>
+                <p className="font-display text-[16px] font-extrabold tracking-[-0.03em] text-navy">
+                  {qNorm ? "No matches" : "Your inbox is clear"}
                 </p>
-                <p className="mx-auto mt-1 max-w-[28ch] text-[12.5px] text-muted">
-                  {query
-                    ? "Try another name."
-                    : "Mutual collaborators appear here automatically once you follow each other."}
+                <p className="mx-auto mt-1.5 max-w-[30ch] text-[13px] leading-relaxed text-muted">
+                  {qNorm
+                    ? "Try another name or message."
+                    : "When you and another innovator follow each other, they’ll show up here ready to message."}
                 </p>
-              </li>
+              </div>
             ) : (
-              filtered.map((room) => {
-                const p = peerOf(room, me);
-                const selected = room.id === activeId;
-                const unreadCount = selected
-                  ? 0
-                  : Math.max(room.unreadCount, localUnread[room.id] ?? 0);
-                const unread = unreadCount > 0;
-                const online = peerIsOnline(p, room);
-                return (
-                  <li key={room.id}>
-                    <button
-                      type="button"
-                      onClick={() => void openRoom(room.id)}
-                      className={`chat-tile liquid-press ${
-                        selected ? "chat-tile-active" : ""
-                      }`}
-                    >
-                      <PeerAvatar peer={p} size={46} online={online} />
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center justify-between gap-2">
-                          <span
-                            className={`truncate text-[14.5px] tracking-[-0.015em] ${
-                              unread && !selected
-                                ? "font-bold text-navy"
-                                : "font-semibold"
+              <ul className="space-y-0.5">
+                {filtered.length > 0 ? (
+                  <>
+                    {startableMutuals.length > 0 ? (
+                      <li className="chat-section-label">Recent</li>
+                    ) : null}
+                    {filtered.map((room) => {
+                      const p = peerOf(room, me);
+                      const selected = room.id === activeId;
+                      const unreadCount = selected
+                        ? 0
+                        : Math.max(
+                            room.unreadCount,
+                            localUnread[room.id] ?? 0,
+                          );
+                      const unread = unreadCount > 0;
+                      const online = peerIsOnline(p, room);
+                      return (
+                        <li key={room.id}>
+                          <button
+                            type="button"
+                            onClick={() => void openRoom(room.id)}
+                            className={`chat-tile liquid-press ${
+                              selected ? "chat-tile-active" : ""
                             }`}
                           >
-                            {peerName(p)}
-                          </span>
-                          <span
-                            className={`shrink-0 text-[11px] ${
-                              selected ? "text-white/50" : "text-muted"
-                            }`}
+                            <PeerAvatar peer={p} size={38} online={online} />
+                            <span className="min-w-0 flex-1">
+                              <span className="flex items-center justify-between gap-2">
+                                <span
+                                  className={`truncate text-[14.5px] tracking-[-0.015em] ${
+                                    unread && !selected
+                                      ? "font-bold text-navy"
+                                      : "font-semibold"
+                                  }`}
+                                >
+                                  {peerName(p)}
+                                </span>
+                                <span
+                                  className={`shrink-0 text-[11px] ${
+                                    selected ? "text-white/50" : "text-muted"
+                                  }`}
+                                >
+                                  {timeLabel(room.lastMessage?.createdAt)}
+                                </span>
+                              </span>
+                              <span
+                                className={`mt-0.5 block truncate text-[12.5px] ${
+                                  selected
+                                    ? "text-white/60"
+                                    : unread
+                                      ? "font-medium text-navy/70"
+                                      : "text-muted"
+                                }`}
+                              >
+                                {room.lastMessage
+                                  ? previewLabel(room.lastMessage)
+                                  : "Say hello"}
+                              </span>
+                            </span>
+                            {unread ? (
+                              <span className="chat-unread">
+                                +{unreadCount}
+                              </span>
+                            ) : null}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </>
+                ) : null}
+
+                {startableMutuals.length > 0 ? (
+                  <>
+                    <li className="chat-section-label">
+                      {filtered.length > 0 ? "Start a chat" : "Mutual collaborators"}
+                    </li>
+                    {startableMutuals.map((u) => {
+                      const name =
+                        u.fullName?.trim() ||
+                        u.username?.trim() ||
+                        "Innovator";
+                      const participant: ChatParticipant = {
+                        userId: u.id,
+                        username: u.username ?? null,
+                        avatar: u.avatar ?? null,
+                      };
+                      const opening = startingPeerId === u.id;
+                      return (
+                        <li key={u.id}>
+                          <button
+                            type="button"
+                            disabled={Boolean(startingPeerId)}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              void startChatWith(
+                                u.id,
+                                u.username || name,
+                                u.avatar,
+                              );
+                            }}
+                            className="chat-tile liquid-press"
                           >
-                            {timeLabel(room.lastMessage?.createdAt)}
-                          </span>
-                        </span>
-                        <span
-                          className={`mt-0.5 block truncate text-[12.5px] ${
-                            selected
-                              ? "text-white/60"
-                              : unread
-                                ? "font-medium text-navy/70"
-                                : "text-muted"
-                          }`}
-                        >
-                          {room.lastMessage
-                            ? previewLabel(room.lastMessage)
-                            : "No messages yet"}
-                        </span>
-                      </span>
-                      {unread ? (
-                        <span className="chat-unread">+{unreadCount}</span>
-                      ) : null}
-                    </button>
-                  </li>
-                );
-              })
+                            <PeerAvatar peer={participant} size={38} />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[14.5px] font-semibold tracking-[-0.015em] text-navy">
+                                {name}
+                              </span>
+                              <span className="mt-0.5 block truncate text-[12.5px] text-muted">
+                                {u.username
+                                  ? `@${u.username}`
+                                  : "Mutual · tap to message"}
+                              </span>
+                            </span>
+                            <span className="chat-tile-cta">
+                              {opening ? "…" : "Message"}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </>
+                ) : null}
+              </ul>
             )}
-          </ul>
+          </div>
         </div>
 
         {/* Thread */}
@@ -754,22 +1126,14 @@ export function ChatSection({
         >
           {!active ? (
             <div className="chat-empty">
-              <div className="mb-4 grid h-[84px] w-[84px] place-items-center rounded-[26px] border border-white/90 bg-white/80 shadow-soft">
+              <div className="chat-empty-mark">
                 <BrandMark size={58} variant="plain" />
               </div>
-              <p className="font-display text-[22px] font-extrabold tracking-[-0.03em] text-navy">
-                Select a conversation
+              <h3>Your conversations</h3>
+              <p>
+                Pick someone from the left to open a thread. Mutual
+                collaborators can message anytime.
               </p>
-              <p className="mt-1.5 max-w-[30ch] text-[14px] leading-relaxed text-muted">
-                Choose a conversation, or message a mutual collaborator.
-              </p>
-              <button
-                type="button"
-                onClick={() => setShowNew(true)}
-                className="liquid-btn liquid-btn-dark mt-5 !min-h-0 px-5 py-2.5 text-[13px]"
-              >
-                New chat
-              </button>
             </div>
           ) : (
             <>
@@ -777,7 +1141,10 @@ export function ChatSection({
                 <button
                   type="button"
                   className="grid h-9 w-9 place-items-center rounded-full bg-canvas text-navy md:hidden"
-                  onClick={() => setActiveId(null)}
+                  onClick={() => {
+                    setActiveId(null);
+                    setPinnedRoom(null);
+                  }}
                   aria-label="Back"
                 >
                   <IconBack />
@@ -961,98 +1328,6 @@ export function ChatSection({
           onClose={() => setLightboxSrc(null)}
         />
       ) : null}
-
-      {showNew ? (
-        <div
-          className="profile-sheet"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setShowNew(false)}
-        >
-          <div
-            className="profile-sheet-panel p-0"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-navy/[0.06] px-5 py-4">
-              <div className="flex items-center gap-3">
-                <BrandMark size={40} variant="soft" />
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gold">
-                    Messages
-                  </p>
-                  <h3 className="font-display text-[20px] font-extrabold tracking-[-0.03em] text-navy">
-                    New chat
-                  </h3>
-                  <p className="mt-0.5 text-[12px] text-muted">
-                    Mutual collaborators only
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowNew(false)}
-                className="liquid-chip !py-1.5"
-              >
-                Close
-              </button>
-            </div>
-            <div className="liquid-scroll max-h-[55vh] overflow-y-auto px-3 py-3">
-              {mutualLoading ? <LiquidLoader label="Loading…" /> : null}
-              {!mutualLoading && mutualPeers.length === 0 ? (
-                <p className="px-3 py-10 text-center text-[13.5px] text-muted">
-                  No mutual collaborators yet. Follow back someone in
-                  Collaborators to unlock chat.
-                </p>
-              ) : null}
-              {!mutualLoading &&
-                mutualPeers.map((u) => {
-                  const name =
-                    u.fullName?.trim() || u.username?.trim() || "Innovator";
-                  const letter = name.slice(0, 1).toUpperCase();
-                  return (
-                    <button
-                      key={u.id}
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setShowNew(false);
-                        void startChatWith(u.id, u.username || name);
-                      }}
-                      className="liquid-press flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-left hover:bg-canvas"
-                    >
-                      <span className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-navy text-[14px] font-bold text-white">
-                        {u.avatar ? (
-                          <Image
-                            src={u.avatar}
-                            alt=""
-                            fill
-                            unoptimized
-                            className="object-cover"
-                          />
-                        ) : (
-                          letter
-                        )}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[14px] font-semibold text-navy">
-                          {name}
-                        </span>
-                        {u.username ? (
-                          <span className="block truncate text-[12px] text-muted">
-                            @{u.username}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="profile-chat !min-w-0 !px-3 !py-1.5 !text-[12px]">
-                        Chat
-                      </span>
-                    </button>
-                  );
-                })}
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1098,6 +1373,7 @@ function ChatImageLightbox({
         src={src}
         alt=""
         className="chat-image-lightbox-img"
+        sizes="100vw"
         onClick={(e) => e.stopPropagation()}
       />
     </div>
@@ -1208,19 +1484,6 @@ function IconSearch() {
         d="M16 16l4 4"
         stroke="currentColor"
         strokeWidth="1.8"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function IconPlus() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M12 5v14M5 12h14"
-        stroke="currentColor"
-        strokeWidth="2.2"
         strokeLinecap="round"
       />
     </svg>

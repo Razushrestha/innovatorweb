@@ -17,7 +17,7 @@ const body = Source_Sans_3({
 
 export const metadata: Metadata = {
   title: "Innovator",
-  description: "Innovator — learn, share, and grow together.",
+  description: "Innovator: learn, share, and grow together.",
   icons: {
     icon: [{ url: "/innovator-logo.png", type: "image/png" }],
     apple: [{ url: "/innovator-logo.png" }],

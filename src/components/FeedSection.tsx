@@ -1,8 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiException } from "@/lib/api-client";
 import { getFeed } from "@/lib/feed-api";
+import {
+  loadSeenPostIds,
+  rankFeedBatch,
+  rememberSeenPostIds,
+} from "@/lib/feed-rank";
 import type { FeedPost } from "@/lib/types";
 import { ComposePrompt } from "./ComposePrompt";
 import { FeedCard } from "./FeedCard";
@@ -25,20 +30,45 @@ export function FeedSection({
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [updatedLabel, setUpdatedLabel] = useState<string | null>(null);
+  const sessionSeedRef = useRef(Date.now());
+  const seenRef = useRef<Set<string>>(new Set());
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    seenRef.current = loadSeenPostIds();
+  }, []);
 
   const load = useCallback(async (nextPage: number, reset: boolean) => {
     try {
-      if (reset) setLoading(true);
-      else setLoadingMore(true);
+      if (reset) {
+        setLoading(true);
+        sessionSeedRef.current = Date.now() ^ Math.floor(Math.random() * 1e9);
+        seenRef.current = loadSeenPostIds();
+      } else {
+        setLoadingMore(true);
+      }
+
       const data = await getFeed(nextPage);
+      const ranked = rankFeedBatch(data.results, {
+        sessionSeed: sessionSeedRef.current,
+        seen: seenRef.current,
+        // Stronger variety on first paint; milder on later pages.
+        diversify: reset || nextPage <= 2,
+      });
+
       setPosts((prev) => {
-        if (reset) return data.results;
+        if (reset) return ranked;
         const seen = new Set(prev.map((p) => p.id));
-        return [...prev, ...data.results.filter((p) => !seen.has(p.id))];
+        return [...prev, ...ranked.filter((p) => !seen.has(p.id))];
       });
       setHasMore(Boolean(data.next));
       setPage(nextPage);
       setError(null);
+      if (reset) {
+        setUpdatedLabel("Fresh for you");
+        window.setTimeout(() => setUpdatedLabel(null), 2200);
+      }
     } catch (e) {
       const msg = e instanceof ApiException ? e.message : "Could not load feed";
       setError(msg);
@@ -51,6 +81,53 @@ export function FeedSection({
   useEffect(() => {
     void load(1, true);
   }, [load, refreshKey]);
+
+  // Mark posts as seen when they stay in view briefly.
+  useEffect(() => {
+    const root = listRef.current;
+    if (!root || posts.length === 0) return;
+
+    const pending = new Set<string>();
+    const timers = new Map<string, number>();
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const id = (entry.target as HTMLElement).dataset.postId;
+          if (!id) continue;
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.55) {
+            if (timers.has(id) || seenRef.current.has(id)) continue;
+            const t = window.setTimeout(() => {
+              pending.add(id);
+              seenRef.current.add(id);
+              timers.delete(id);
+              if (pending.size >= 4) {
+                rememberSeenPostIds(Array.from(pending));
+                pending.clear();
+              }
+            }, 900);
+            timers.set(id, t);
+          } else {
+            const t = timers.get(id);
+            if (t) {
+              window.clearTimeout(t);
+              timers.delete(id);
+            }
+          }
+        }
+      },
+      { threshold: [0.55], rootMargin: "0px 0px -8% 0px" },
+    );
+
+    const nodes = root.querySelectorAll<HTMLElement>("[data-post-id]");
+    nodes.forEach((node) => observer.observe(node));
+
+    return () => {
+      observer.disconnect();
+      timers.forEach((t) => window.clearTimeout(t));
+      if (pending.size) rememberSeenPostIds(Array.from(pending));
+    };
+  }, [posts]);
 
   if (loading && posts.length === 0) {
     return (
@@ -81,7 +158,7 @@ export function FeedSection({
         {onCompose ? <ComposePrompt onCompose={onCompose} /> : null}
         <LiquidEmpty
           title="Start the conversation"
-          body="No posts yet — share something with Innovator."
+          body="No posts yet. Share something with Innovator."
           actionLabel={onCompose ? "Create a post" : undefined}
           onAction={onCompose}
         />
@@ -90,12 +167,26 @@ export function FeedSection({
   }
 
   return (
-    <div className="feed-list pb-8">
+    <div className="feed-list pb-8" ref={listRef}>
       {onCompose ? <ComposePrompt onCompose={onCompose} /> : null}
+
+      <div className="mb-2 flex items-center justify-between gap-2 px-1">
+        <p className="text-[12px] font-semibold text-navy/45">
+          {updatedLabel ?? "Home feed"}
+        </p>
+        <button
+          type="button"
+          onClick={() => void load(1, true)}
+          className="liquid-press rounded-full px-2.5 py-1 text-[12px] font-semibold text-navy/55 transition hover:bg-white hover:text-navy"
+        >
+          Refresh
+        </button>
+      </div>
 
       {posts.map((post, index) => (
         <div
           key={post.id}
+          data-post-id={post.id}
           className="animate-fade-up"
           style={{ animationDelay: `${Math.min(index, 6) * 50}ms` }}
         >

@@ -168,7 +168,7 @@ export function ComposePost({ onPublished }: Props) {
         ) : null}
         {done ? (
           <p className="liquid-panel px-3 py-2 text-[12.5px] font-semibold text-[var(--repost)]">
-            Posted — check Home for your update.
+            Posted. Check Home for your update.
           </p>
         ) : null}
 

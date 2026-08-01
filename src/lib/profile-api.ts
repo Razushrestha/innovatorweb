@@ -150,7 +150,16 @@ export async function blockUser(targetAuthUserId: string) {
 
 function asListUser(raw: Record<string, unknown>): ProfileListUser {
   return {
-    id: String(raw.id ?? ""),
+    // Match mobile: list `id` is the auth user id used by follow/chat.
+    // Use || so empty auth_user_id strings do not wipe a valid id.
+    id: String(
+      raw.id ||
+        raw.auth_user_id ||
+        raw.authUserId ||
+        raw.user_id ||
+        raw.userId ||
+        "",
+    ),
     username: (raw.username as string | null) ?? null,
     fullName:
       (raw.full_name as string | null) ??

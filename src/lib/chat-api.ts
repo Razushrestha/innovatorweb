@@ -116,6 +116,7 @@ export async function listConversations() {
 export async function createConversation(input: {
   participantUserId: string;
   participantUsername?: string;
+  participantAvatar?: string;
 }) {
   const data = await apiRequest<Record<string, unknown>>(
     ApiConfig.chatBaseUrl,
@@ -125,10 +126,19 @@ export async function createConversation(input: {
       body: {
         participant_user_id: input.participantUserId,
         participant_username: input.participantUsername,
+        participant_avatar: input.participantAvatar,
       },
     },
   );
-  return asConversation(data);
+  // Some backends wrap the conversation in { conversation | data }.
+  const nested =
+    (data.conversation as Record<string, unknown> | undefined) ||
+    (data.data as Record<string, unknown> | undefined);
+  const raw =
+    nested && typeof nested === "object" && !Array.isArray(nested)
+      ? nested
+      : data;
+  return asConversation(raw);
 }
 
 export async function listMessages(conversationId: string, page = 1) {
@@ -144,15 +154,31 @@ export async function listMessages(conversationId: string, page = 1) {
 }
 
 export async function sendMessage(conversationId: string, content: string) {
+  if (!conversationId.trim()) {
+    throw new ApiException("Missing conversation. Open the chat again.");
+  }
   const data = await apiRequest<Record<string, unknown>>(
     ApiConfig.chatBaseUrl,
-    `/api/chat/conversations/${conversationId}/messages`,
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages`,
     {
       method: "POST",
-      body: { content, message_type: "text" },
+      body: {
+        content,
+        message_type: "text",
+        media_url: null,
+        reply_to_id: null,
+      },
     },
   );
-  return asMessage(data);
+  // Handle both envelope-unwrapped message and nested shapes.
+  const nested =
+    (data.message as Record<string, unknown> | undefined) ||
+    (data.data as Record<string, unknown> | undefined);
+  const raw =
+    nested && typeof nested === "object" && !Array.isArray(nested) && (nested.id || nested.content)
+      ? nested
+      : data;
+  return asMessage(raw);
 }
 
 /**

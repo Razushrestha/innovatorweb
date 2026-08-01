@@ -77,6 +77,24 @@ export function ProfileView({
   }, [profile]);
 
   useEffect(() => {
+    if (!menuOpen) return;
+    const onPointer = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.(".profile-cover-menu, .profile-glass-btn")) return;
+      setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
     const key = `innovator_title_${local.authUserId || local.id}`;
     const coverKey = `innovator_cover_${local.authUserId || local.id}`;
     try {
@@ -221,7 +239,7 @@ export function ProfileView({
   return (
     <div className="pb-6">
       <div className="profile-shell animate-fade-up">
-        <div className="profile-cover">
+        <div className={`profile-cover ${menuOpen ? "menu-open" : ""}`}>
           <div className="profile-cover-media">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -232,7 +250,7 @@ export function ProfileView({
             <div className="profile-cover-scrim" />
           </div>
 
-          <div className="absolute left-3.5 top-3.5 z-10">
+          <div className="absolute left-3.5 top-3.5 z-20">
             {onBack ? (
               <button
                 type="button"
@@ -249,11 +267,12 @@ export function ProfileView({
                   onClick={() => setMenuOpen((v) => !v)}
                   className="profile-glass-btn liquid-press"
                   aria-label="Profile options"
+                  aria-expanded={menuOpen}
                 >
                   <IconMore />
                 </button>
                 {menuOpen ? (
-                  <div className="absolute left-0 top-12 z-20 w-48 overflow-hidden rounded-[18px] border border-white/90 bg-white/96 py-1 shadow-soft backdrop-blur-xl">
+                  <div className="profile-cover-menu">
                     <MenuItem
                       label="Edit info"
                       onClick={() => {
@@ -282,7 +301,7 @@ export function ProfileView({
           </div>
 
           {isOwn ? (
-            <div className="absolute right-3.5 top-3.5 z-10">
+            <div className="absolute right-3.5 top-3.5 z-20">
               <label className="profile-glass-btn liquid-press cursor-pointer">
                 <IconCamera />
                 <input
@@ -295,7 +314,6 @@ export function ProfileView({
               </label>
             </div>
           ) : null}
-
         </div>
 
         <div className="profile-avatar-anchor">
@@ -356,7 +374,7 @@ export function ProfileView({
           </p>
 
           {local.bio?.trim() ? (
-            <p className="mx-auto mt-1.5 max-w-[46ch] text-[13px] leading-snug text-navy/70">
+            <p className="profile-bio">
               {local.bio}
             </p>
           ) : null}
@@ -427,7 +445,7 @@ export function ProfileView({
             <span className="profile-stat-divider" />
             <div className="profile-stat cursor-default">
               <span className="profile-stat-value">
-                {postsLoading ? "—" : posts.length}
+                {postsLoading ? "…" : posts.length}
               </span>
               <span className="profile-stat-mark" />
               <span className="profile-stat-label">Innovation</span>
@@ -526,7 +544,7 @@ function MenuItem({ label, onClick }: { label: string; onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="block w-full px-3.5 py-2.5 text-left text-[13.5px] font-semibold text-navy hover:bg-canvas"
+      className="block w-full rounded-[12px] px-3.5 py-2.5 text-left text-[13.5px] font-semibold text-navy hover:bg-navy/[0.05]"
     >
       {label}
     </button>
@@ -675,11 +693,22 @@ function PeopleSheet({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<ProfileListUser[]>([]);
+  const [query, setQuery] = useState("");
   const [mutualIds, setMutualIds] = useState<Set<string>>(new Set());
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const myUserId = AuthSession.load().userId;
   const viewingOwnList = !authUserId || authUserId === myUserId;
+
+  const filteredUsers = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) => {
+      const name = (u.fullName || "").toLowerCase();
+      const handle = (u.username || "").toLowerCase();
+      return name.includes(q) || handle.includes(q);
+    });
+  }, [users, query]);
 
   useEffect(() => {
     void (async () => {
@@ -772,6 +801,40 @@ function PeopleSheet({
             Close
           </button>
         </div>
+        <div className="border-b border-navy/[0.06] px-4 py-3">
+          <label className="relative block">
+            <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-navy/35">
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden
+              >
+                <circle
+                  cx="11"
+                  cy="11"
+                  r="6.5"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                />
+                <path
+                  d="M16 16l4 4"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </span>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search people…"
+              className="chat-search !mt-0"
+              autoComplete="off"
+            />
+          </label>
+        </div>
         <div className="liquid-scroll overflow-y-auto px-3 py-3">
           {loading ? <LiquidLoader label="Loading…" /> : null}
           {!loading && error ? <LiquidError message={error} /> : null}
@@ -785,8 +848,13 @@ function PeopleSheet({
               No one here yet
             </p>
           ) : null}
+          {!loading && !error && users.length > 0 && filteredUsers.length === 0 ? (
+            <p className="px-3 py-10 text-center text-[13.5px] text-muted">
+              No matches for “{query.trim()}”
+            </p>
+          ) : null}
           {!loading &&
-            users.map((u) => {
+            filteredUsers.map((u) => {
               const name =
                 u.fullName?.trim() || u.username?.trim() || "Innovator";
               const letter = name.slice(0, 1).toUpperCase();
@@ -843,7 +911,7 @@ function PeopleSheet({
                             e.stopPropagation();
                             onStartChat?.({
                               userId: u.id,
-                              username: u.username || name,
+                              username: u.username?.trim() || name,
                             });
                           }}
                           className="profile-chat liquid-press !min-w-0 !px-3 !py-1.5 !text-[12px]"
